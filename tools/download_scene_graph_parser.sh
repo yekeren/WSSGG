@@ -39,8 +39,7 @@ download "https://storage.googleapis.com/google-code-archive-downloads/v2/code.g
 cd ..
 echo -e "\n\n\n"
 echo "Commands to test the Stanford Scene Graph Parser:"
-echo "export CLASSPATH=\"$CLASSPATH:${data_dir_full}:${data_dir_full}/stanford-corenlp-full-2015-12-09/*\""
 
 echo "cd \"${data_dir}\""
-echo "javac \"SceneGraphDemo.java\""
-echo "java -mx2g \"SceneGraphDemo\""
+echo "javac -cp \"stanford-corenlp-full-2015-12-09/*:.\" \"SceneGraphDemo.java\""
+echo "java -mx2g -cp \"stanford-corenlp-full-2015-12-09/*:.\" \"SceneGraphDemo\""
