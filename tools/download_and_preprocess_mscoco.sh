@@ -45,9 +45,16 @@ unzip -n "${raw_data}/${trainval_annotations}" -d "${raw_data}"
 unzip -n "${raw_data}/${testdev_annotations}" -d "${raw_data}"
 
 # Extract scene graphs from captions.
+if [ ! -f "${raw_data}/annotations/scenegraphs_val2017.json" ] || [ ! -f "${raw_data}/annotations/scenegraphs_val2017.json" ]; then
+  python "tools/create_coco_scenegraphs_from_captions.py" \
+    --logtostderr \
+    --number_of_threads="10" \
+    --train_caption_annotations_file="${raw_data}/annotations/captions_train2017.json" \
+    --val_caption_annotations_file="${raw_data}/annotations/captions_val2017.json" \
+    --output_directory="${raw_data}/annotations"
+fi
 
-python "tools/create_coco_scenegraphs_from_captions.py" \
-  --logtostderr \
-  --train_caption_annotations_file="${raw_data}/annotations/captions_train2017.json" \
-  --val_caption_annotations_file="${raw_data}/annotations/captions_val2017.json" \
-  --output_directory="${raw_data}/annotations"
+# Preview the extracted scene graphs from captions.
+# Or, you can also use jupyter and `tools/show_coco_scenegraphs.ipynb`.
+python "tools/show_coco_scenegraphs.py" \
+  --scenegraph_annotations_file="${raw_data}/annotations/scenegraphs_val2017.json"
