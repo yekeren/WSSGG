@@ -64,7 +64,9 @@ def _thread_func(thr_id, images, id_to_captions):
     sg_list = []
 
     for caption in captions:
-      caption = caption.replace('\n', '')
+      caption = caption.strip().replace('\n', '').lower()
+      if caption[-1] != '.':
+        caption += '.'
       proc.stdin.write(caption + '\n')
       proc.stdin.flush()
       outs = proc.stdout.readline().strip('\n')
@@ -89,9 +91,6 @@ def _create_scenegraphs_from_captions(caption_annotations_file,
   Args:
     caption_annotations_file: JSON file containing caption annotations.
     scenegraph_annotations_file: JSON file containing caption annotations.
-
-  Returns:
-    A JSON object with scene graphs injected.
   """
   with tf.io.gfile.GFile(caption_annotations_file, 'r') as fid:
     annots = json.load(fid)
