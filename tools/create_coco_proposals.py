@@ -35,9 +35,10 @@ flags.DEFINE_string('val_image_file', '', 'Validation image zip file.')
 flags.DEFINE_string('test_image_file', '', 'Test image zip file.')
 flags.DEFINE_string('output_directory', '', 'Output directory.')
 flags.DEFINE_integer('number_of_processes', 20, 'Size of the process pool.')
-flags.DEFINE_integer('number_of_splits', 10, 'Number of directory splits.')
 
 FLAGS = flags.FLAGS
+
+_NUM_PROPOSAL_SUBDIRS = 10
 
 
 def _proc_initializer():
@@ -88,7 +89,7 @@ def _extract_ssbox(filename, encoded_jpg):
 
   assert file_id.isdigit()
   output_path = os.path.join(FLAGS.output_directory,
-                             str(int(file_id) % FLAGS.number_of_splits),
+                             str(int(file_id) % _NUM_PROPOSAL_SUBDIRS),
                              '{}.npy'.format(file_id))
 
   with open(output_path, 'wb') as fid:
@@ -126,7 +127,7 @@ def main(_):
 
   logging.set_verbosity(logging.INFO)
 
-  for i in range(FLAGS.number_of_splits):
+  for i in range(_NUM_PROPOSAL_SUBDIRS):
     tf.gfile.MakeDirs(os.path.join(FLAGS.output_directory, str(i)))
 
   _create_ssbox_nparray(FLAGS.val_image_file)
