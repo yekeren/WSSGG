@@ -213,7 +213,7 @@ def main(_):
                                      FLAGS.train_scenegraph_annotations_file,
                                      output_train_file, 20)
 
-  assert False
+  logging.info('Done')
 
 
 if __name__ == '__main__':
