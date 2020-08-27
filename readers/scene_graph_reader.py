@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+"""Reads from tfrecord files and yields batched tensors."""
 
 from __future__ import absolute_import
 from __future__ import division
@@ -21,9 +22,6 @@ import tensorflow as tf
 
 from protos import reader_pb2
 from tf_slim import tfexample_decoder
-
-from graph_nets import utils_tf
-from graph_nets.graphs import GraphsTuple
 
 
 def _parse_single_example(example, options):
@@ -39,51 +37,69 @@ def _parse_single_example(example, options):
   # Initialize `keys_to_features`.
   example_fmt = {
       'id': tf.io.FixedLenFeature([], tf.int64),
-      'coco_url': tf.io.FixedLenFeature([], tf.string),
+      # Proposals
+      'image/n_proposal': tf.io.FixedLenFeature([], tf.int64),
       'image/proposal/bbox/ymin': tf.io.VarLenFeature(tf.float32),
       'image/proposal/bbox/xmin': tf.io.VarLenFeature(tf.float32),
       'image/proposal/bbox/ymax': tf.io.VarLenFeature(tf.float32),
       'image/proposal/bbox/xmax': tf.io.VarLenFeature(tf.float32),
-      'graphs/n_node': tf.io.VarLenFeature(tf.int64),
-      'graphs/n_edge': tf.io.VarLenFeature(tf.int64),
-      'graphs/nodes': tf.io.VarLenFeature(tf.string),
-      'graphs/edges': tf.io.VarLenFeature(tf.string),
-      'graphs/senders': tf.io.VarLenFeature(tf.int64),
-      'graphs/receivers': tf.io.VarLenFeature(tf.int64),
+      'image/proposal/feature': tf.io.VarLenFeature(tf.float32),
+      # Scene graph.
+      'scene_graph/n_triple': tf.io.FixedLenFeature([], tf.int64),
+      # - Predicate.
+      'scene_graph/predicate': tf.io.VarLenFeature(tf.string),
+      # - Subject.
+      'scene_graph/subject': tf.io.VarLenFeature(tf.string),
+      'scene_graph/subject/bbox/ymin': tf.io.VarLenFeature(tf.float32),
+      'scene_graph/subject/bbox/xmin': tf.io.VarLenFeature(tf.float32),
+      'scene_graph/subject/bbox/ymax': tf.io.VarLenFeature(tf.float32),
+      'scene_graph/subject/bbox/xmax': tf.io.VarLenFeature(tf.float32),
+      # - Object.
+      'scene_graph/object': tf.io.VarLenFeature(tf.string),
+      'scene_graph/object/bbox/ymin': tf.io.VarLenFeature(tf.float32),
+      'scene_graph/object/bbox/xmin': tf.io.VarLenFeature(tf.float32),
+      'scene_graph/object/bbox/ymax': tf.io.VarLenFeature(tf.float32),
+      'scene_graph/object/bbox/xmax': tf.io.VarLenFeature(tf.float32),
   }
 
   parsed = tf.parse_single_example(example, example_fmt)
 
-  # Decode proposals.
-  bbox_decoder = tfexample_decoder.BoundingBox(prefix='image/proposal/bbox/')
-  proposals = bbox_decoder.tensors_to_item(parsed)
-
-  # Decode scene graphs.
-
-  graphs = GraphsTuple(
-      globals=None,
-      nodes=tf.sparse_tensor_to_dense(parsed['graphs/nodes'], ''),
-      edges=tf.sparse_tensor_to_dense(parsed['graphs/edges'], ''),
-      receivers=tf.sparse_tensor_to_dense(parsed['graphs/receivers'], 0),
-      senders=tf.sparse_tensor_to_dense(parsed['graphs/senders'], 0),
-      n_node=tf.sparse_tensor_to_dense(parsed['graphs/n_node'], 0),
-      n_edge=tf.sparse_tensor_to_dense(parsed['graphs/n_edge'], 0))
-
-  num_graphs = utils_tf.get_num_graphs(graphs)
-  index = tf.random.uniform([], minval=0, maxval=num_graphs, dtype=tf.int32)
-  graph = utils_tf.get_graph(graphs, index)
+  # Decode bounding boxes.
+  proposals = tfexample_decoder.BoundingBox(
+      prefix='image/proposal/bbox/').tensors_to_item(parsed)
+  subject_boxes = tfexample_decoder.BoundingBox(
+      prefix='scene_graph/subject/bbox/').tensors_to_item(parsed)
+  object_boxes = tfexample_decoder.BoundingBox(
+      prefix='scene_graph/object/bbox/').tensors_to_item(parsed)
 
   feature_dict = {
-      'id': parsed['id'],
-      'url': parsed['coco_url'],
-      'image/n_proposal': tf.shape(proposals)[0],
-      'image/proposals': proposals,
-      'graph/n_node': tf.reshape(graph.n_node, []),
-      'graph/n_edge': tf.reshape(graph.n_edge, []),
-      'graph/nodes': graph.nodes,
-      'graph/edges': graph.edges,
-      'graph/senders': graph.senders,
-      'graph/receivers': graph.receivers,
+      'id':
+          parsed['id'],
+      # Proposals.
+      'image/n_proposal':
+          parsed['image/n_proposal'],
+      'image/proposal':
+          proposals,
+      'image/proposal/feature':
+          tf.reshape(
+              tf.sparse_tensor_to_dense(parsed['image/proposal/feature']),
+              [-1, options.feature_dimensions]),
+      # Scene graph.
+      'scene_graph/n_triple':
+          parsed['scene_graph/n_triple'],
+      # - Predicate.
+      'scene_graph/predicate':
+          tf.sparse_tensor_to_dense(parsed['scene_graph/predicate'], ''),
+      # - Subject.
+      'scene_graph/subject':
+          tf.sparse_tensor_to_dense(parsed['scene_graph/subject'], ''),
+      'scene_graph/subject/box':
+          subject_boxes,
+      # - Object.
+      'scene_graph/object':
+          tf.sparse_tensor_to_dense(parsed['scene_graph/object'], ''),
+      'scene_graph/object/box':
+          object_boxes,
   }
 
   for key in feature_dict.keys():
@@ -118,15 +134,15 @@ def _create_dataset(options, is_training, input_pipeline_context=None):
 
   padded_shapes = {
       'id': [],
-      'url': [],
       'image/n_proposal': [],
-      'image/proposals': [None, 4],
-      'graph/n_node': [],
-      'graph/n_edge': [],
-      'graph/nodes': [None],
-      'graph/edges': [None],
-      'graph/senders': [None],
-      'graph/receivers': [None],
+      'image/proposal': [None, 4],
+      'image/proposal/feature': [None, options.feature_dimensions],
+      'scene_graph/n_triple': [],
+      'scene_graph/predicate': [None],
+      'scene_graph/subject': [None],
+      'scene_graph/subject/box': [None, 4],
+      'scene_graph/object': [None],
+      'scene_graph/object/box': [None, 4],
   }
   dataset = dataset.padded_batch(options.batch_size,
                                  padded_shapes=padded_shapes,
@@ -145,8 +161,8 @@ def get_input_fn(options, is_training):
   Returns:
     input_fn: a callable that returns a dataset.
   """
-  if not isinstance(options, reader_pb2.COCOReader):
-    raise ValueError('options has to be an instance of COCOReader.')
+  if not isinstance(options, reader_pb2.SceneGraphReader):
+    raise ValueError('options has to be an instance of SceneGraphReader.')
 
   def _input_fn(input_pipeline_context=None):
     """Returns a python dictionary.

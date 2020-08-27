@@ -1,0 +1,29 @@
+syntax = "proto2";
+
+message LearningRateSchedule {
+  oneof learning_rate_schedule {
+    PiecewiseConstantDecay piecewise_constant_decay = 1;
+    ExponentialDecay exponential_decay = 2;
+    PolynomialDecay polynomial_decay = 3;
+  }
+}
+
+message PiecewiseConstantDecay {
+  repeated int32 boundaries = 1;
+  repeated float values = 2;
+}
+
+message ExponentialDecay {
+  optional float initial_learning_rate = 1;
+  optional int32 decay_steps = 2;
+  optional float decay_rate = 3;
+  optional bool staircase = 4 [default = false];
+}
+
+message PolynomialDecay {
+  optional float initial_learning_rate = 1; 
+  optional int32 decay_steps = 2;
+  optional float end_learning_rate = 3 [default = 0.0001];
+  optional float power = 4 [default = 1.0];
+  optional bool cycle = 5 [default = false];
+}
