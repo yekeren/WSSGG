@@ -1,0 +1,23 @@
+syntax = "proto2";
+
+import "protos/fast_rcnn.proto";
+import "protos/hyperparams.proto";
+
+message Model {
+  extensions 1000 to max;
+}
+
+message MaxFlow {
+  extend Model {
+    optional MaxFlow ext = 1000;
+  }
+
+  // Meta file containing the token to id mapping.
+  optional string token_to_id_meta_file = 1;
+
+  // Entity embedding file, data shape=[1 + #entities, dims].
+  optional string entity_emb_npy_file = 2;
+
+  // Predicate embedding file, data shape=[1 + #predicates, dims].
+  optional string predicate_emb_npy_file = 3;
+}

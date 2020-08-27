@@ -1,0 +1,68 @@
+syntax = "proto2";
+
+import "protos/model.proto";
+import "protos/optimizer.proto";
+import "protos/learning_rate_schedule.proto";
+import "protos/reader.proto";
+
+message Pipeline {
+  // Train reader.
+  optional Reader train_reader = 1;
+
+  // Eval reader.
+  optional Reader eval_reader = 2;
+
+  // Model config.
+  optional Model model = 3;
+
+  // Train config.
+  optional TrainConfig train_config = 4;
+
+  // Eval config
+  optional EvalConfig eval_config = 5;
+}
+
+message EvalConfig {
+  // Positive number of steps for which to evaluate model. if `None`, evaluate
+  // util `input_fn` raises an end-of-input exception.
+  optional uint32 steps = 1;
+
+  // Start evaluating after waiting for this many seconds.
+  optional uint32 start_delay_secs = 2 [default = 60];
+
+  // Do not re-evaluate unless the last evaluation was started at least this
+  // many seconds ago.
+  optional uint32 throttle_secs = 3 [default = 60];
+}
+
+message TrainConfig {
+  // Learning rate schedule.
+  optional LearningRateSchedule learning_rate_schedule = 1;
+
+  // Optimizer to use.
+  optional Optimizer optimizer = 2;
+
+  // Positive number of total steps for which to train model.
+  optional uint32 max_steps = 3;
+
+  // The frequency, in number of global steps, that the global step/sec and the
+  // loss will be logged during training.
+  optional int32 log_step_count_steps = 4 [default = 2000];
+
+  // Save summaries every this many steps.
+  optional uint32 save_summary_steps = 5 [default = 2000];
+
+  // Save checkpoints every this many steps.
+  optional uint32 save_checkpoints_steps = 6 [default = 2000];
+
+  // The maximum number of recent checkpoint files to keep.
+  optional uint32 keep_checkpoint_max = 7 [default = 5];
+
+  // Max gradient norm to be clipped.
+  optional float max_gradient_norm = 8;
+
+  // If true, train a adversarial network.
+  optional bool train_adversarial_network = 9 [default = false];
+
+  optional float adversarial_loss_weight = 10 [default = 1.0];
+}
