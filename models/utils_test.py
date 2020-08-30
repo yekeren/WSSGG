@@ -19,12 +19,13 @@ from __future__ import print_function
 
 import numpy as np
 import tensorflow as tf
-from models import core
+
+from models import utils
 
 tf.compat.v1.enable_eager_execution()
 
 
-class CoreTest(tf.test.TestCase):
+class UtilsTest(tf.test.TestCase):
 
   def test_compute_max_path_sum_batch1_triple1(self):
     """ Basic test case.
@@ -46,7 +47,7 @@ class CoreTest(tf.test.TestCase):
         dtype=np.float32)
 
     (max_path_sum, subject_proposal_index,
-     object_proposal_index) = core.compute_max_path_sum(
+     object_proposal_index) = utils.compute_max_path_sum(
          n_proposal=np.array([n_proposal]),
          n_triple=np.array([n_triple]),
          subject_to_proposal=subject_to_proposal.reshape(
@@ -79,7 +80,7 @@ class CoreTest(tf.test.TestCase):
         dtype=np.float32)
 
     (max_path_sum, subject_proposal_index,
-     object_proposal_index) = core.compute_max_path_sum(
+     object_proposal_index) = utils.compute_max_path_sum(
          n_proposal=np.array([n_proposal]),
          n_triple=np.array([n_triple]),
          subject_to_proposal=subject_to_proposal.reshape(
@@ -112,7 +113,7 @@ class CoreTest(tf.test.TestCase):
         dtype=np.float32)
 
     (max_path_sum, subject_proposal_index,
-     object_proposal_index) = core.compute_max_path_sum(
+     object_proposal_index) = utils.compute_max_path_sum(
          n_proposal=np.array([n_proposal]),
          n_triple=np.array([n_triple]),
          subject_to_proposal=subject_to_proposal.reshape(
@@ -159,7 +160,7 @@ class CoreTest(tf.test.TestCase):
         dtype=np.float32)
 
     (max_path_sum, subject_proposal_index,
-     object_proposal_index) = core.compute_max_path_sum(
+     object_proposal_index) = utils.compute_max_path_sum(
          n_proposal=np.array([n_proposal]),
          n_triple=np.array([n_triple]),
          subject_to_proposal=np.expand_dims(
@@ -220,7 +221,7 @@ class CoreTest(tf.test.TestCase):
         dtype=np.float32)
 
     (max_path_sum, subject_proposal_index,
-     object_proposal_index) = core.compute_max_path_sum(
+     object_proposal_index) = utils.compute_max_path_sum(
          n_proposal=np.array([n_proposal]),
          n_triple=np.array([n_triple]),
          subject_to_proposal=np.expand_dims(
@@ -281,7 +282,7 @@ class CoreTest(tf.test.TestCase):
         dtype=np.float32)
 
     (max_path_sum, subject_proposal_index,
-     object_proposal_index) = core.compute_max_path_sum(
+     object_proposal_index) = utils.compute_max_path_sum(
          n_proposal=np.array([n_proposal]),
          n_triple=np.array([n_triple]),
          subject_to_proposal=np.expand_dims(
@@ -302,6 +303,110 @@ class CoreTest(tf.test.TestCase):
     self.assertAllClose(max_path_sum, [[8, 7, 0]])
     self.assertAllEqual(subject_proposal_index, [[2, 0, -1]])
     self.assertAllEqual(object_proposal_index, [[3, 1, -1]])
+
+  def test_gather_overlapped_box_indicator_by_iou_batch1(self):
+    (highly_overlapped,
+     roughly_overlapped) = utils.gather_overlapped_box_indicator_by_iou(
+         n_proposal=[4],
+         proposals=np.array([[[-1, -1, 0, 0], [0, 0, 0.1, 0.1], [0, 0, 0.5, 1],
+                              [0, 0, 0.499, 1]]],
+                            dtype=np.float32),
+         n_reference=[1],
+         reference=np.array([[[0, 0, 1, 1]]], dtype=np.float32),
+         threshold=0.5)
+
+    self.assertAllClose(highly_overlapped, [[[False, False, True, False]]])
+    self.assertAllClose(roughly_overlapped, [[[False, True, False, True]]])
+
+  def test_gather_overlapped_box_indicator_by_iou_batch2(self):
+    proposals1 = [[-1, -1, 0, 0], [0, 0, 0.1, 0.1], [0, 0, 0.5, 1],
+                  [0, 0, 0.499, 1]]
+    reference1 = [[0, 0, 1, 1], [0, 0, 1, 1]]
+    highly_overlappet_gt1 = [[False, False, True, False],
+                             [False, False, True, False]]
+    roughly_overlapped_gt1 = [[False, True, False, True],
+                              [False, True, False, True]]
+
+    proposals2 = [[-1, -1, 0, 0], [0, 0, 0.1, 0.1], [0, 0, 0.5, 1],
+                  [0, 0, 0.499, 1]]
+    reference2 = [[0, 0, 1, 1], [0, 0, 1, 1]]
+    highly_overlappet_gt2 = [[False, False, True, False],
+                             [False, False, True, False]]
+    roughly_overlapped_gt2 = [[False, True, False, True],
+                              [False, True, False, True]]
+
+    (highly_overlapped,
+     roughly_overlapped) = utils.gather_overlapped_box_indicator_by_iou(
+         n_proposal=[4, 4],
+         proposals=np.array([proposals1, proposals2], dtype=np.float32),
+         n_reference=[2, 2],
+         reference=np.array([reference1, reference2], dtype=np.float32),
+         threshold=0.5)
+
+    self.assertAllEqual(highly_overlapped,
+                        [highly_overlappet_gt1, highly_overlappet_gt2])
+    self.assertAllEqual(roughly_overlapped,
+                        [roughly_overlapped_gt1, roughly_overlapped_gt2])
+
+  def test_gather_overlapped_box_indicator_by_iou_batch2_mask_reference(self):
+    proposals1 = [[-1, -1, 0, 0], [0, 0, 0.1, 0.1], [0, 0, 0.5, 1],
+                  [0, 0, 0.499, 1]]
+    reference1 = [[0, 0, 1, 1], [0, 0, 1, 1]]
+    highly_overlappet_gt1 = [[False, False, True, False],
+                             [False, False, True, False]]
+    roughly_overlapped_gt1 = [[False, True, False, True],
+                              [False, True, False, True]]
+
+    proposals2 = [[-1, -1, 0, 0], [0, 0, 0.1, 0.1], [0, 0, 0.5, 1],
+                  [0, 0, 0.499, 1]]
+    reference2 = [[0, 0, 1, 1], [0, 0, 1, 1]]
+    highly_overlappet_gt2 = [[False, False, True, False],
+                             [False, False, False, False]]
+    roughly_overlapped_gt2 = [[False, True, False, True],
+                              [False, False, False, False]]
+
+    (highly_overlapped,
+     roughly_overlapped) = utils.gather_overlapped_box_indicator_by_iou(
+         n_proposal=[4, 4],
+         proposals=np.array([proposals1, proposals2], dtype=np.float32),
+         n_reference=[2, 1],
+         reference=np.array([reference1, reference2], dtype=np.float32),
+         threshold=0.5)
+
+    self.assertAllEqual(highly_overlapped,
+                        [highly_overlappet_gt1, highly_overlappet_gt2])
+    self.assertAllEqual(roughly_overlapped,
+                        [roughly_overlapped_gt1, roughly_overlapped_gt2])
+
+  def test_gather_overlapped_box_indicator_by_iou_batch2_mask_proposal(self):
+    proposals1 = [[-1, -1, 0, 0], [0, 0, 0.1, 0.1], [0, 0, 0.5, 1],
+                  [0, 0, 0.499, 1]]
+    reference1 = [[0, 0, 1, 1], [0, 0, 1, 1]]
+    highly_overlappet_gt1 = [[False, False, True, False],
+                             [False, False, True, False]]
+    roughly_overlapped_gt1 = [[False, True, False, False],
+                              [False, True, False, False]]
+
+    proposals2 = [[-1, -1, 0, 0], [0, 0, 0.1, 0.1], [0, 0, 0.5, 1],
+                  [0, 0, 0.499, 1]]
+    reference2 = [[0, 0, 1, 1], [0, 0, 1, 1]]
+    highly_overlappet_gt2 = [[False, False, True, False],
+                             [False, False, False, False]]
+    roughly_overlapped_gt2 = [[False, True, False, True],
+                              [False, False, False, False]]
+
+    (highly_overlapped,
+     roughly_overlapped) = utils.gather_overlapped_box_indicator_by_iou(
+         n_proposal=[3, 4],
+         proposals=np.array([proposals1, proposals2], dtype=np.float32),
+         n_reference=[2, 1],
+         reference=np.array([reference1, reference2], dtype=np.float32),
+         threshold=0.5)
+
+    self.assertAllEqual(highly_overlapped,
+                        [highly_overlappet_gt1, highly_overlappet_gt2])
+    self.assertAllEqual(roughly_overlapped,
+                        [roughly_overlapped_gt1, roughly_overlapped_gt2])
 
 
 if __name__ == '__main__':
