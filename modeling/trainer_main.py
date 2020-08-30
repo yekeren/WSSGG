@@ -62,12 +62,13 @@ def main(_):
     tf.config.experimental.set_memory_growth(gpu, True)
 
   tf.io.gfile.makedirs(FLAGS.model_dir)
-  if FLAGS.pipeline_proto != os.path.join(FLAGS.model_dir, 'pipeline.pbtxt'):
-    tf.io.gfile.copy(FLAGS.pipeline_proto,
-                     os.path.join(FLAGS.model_dir, 'pipeline.pbtxt'),
-                     overwrite=True)
 
-  pipeline_proto = _load_pipeline_proto(FLAGS.pipeline_proto)
+  saved_pipeline_proto = os.path.join(FLAGS.model_dir, 'pipeline.pbtxt')
+  if os.path.isfile(saved_pipeline_proto):
+    pipeline_proto = _load_pipeline_proto(saved_pipeline_proto)
+  else:
+    pipeline_proto = _load_pipeline_proto(FLAGS.pipeline_proto)
+    tf.io.gfile.copy(FLAGS.pipeline_proto, saved_pipeline_proto)
 
   if FLAGS.job == 'train_and_evaluate':
     trainer.train_and_evaluate(

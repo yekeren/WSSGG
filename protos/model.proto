@@ -1,15 +1,14 @@
 syntax = "proto2";
 
-import "protos/fast_rcnn.proto";
 import "protos/hyperparams.proto";
 
 message Model {
   extensions 1000 to max;
 }
 
-message MaxFlow {
+message MaxPathSum {
   extend Model {
-    optional MaxFlow ext = 1000;
+    optional MaxPathSum ext = 1000;
   }
 
   // Meta file containing the token to id mapping.
@@ -20,4 +19,10 @@ message MaxFlow {
 
   // Predicate embedding file, data shape=[1 + #predicates, dims].
   optional string predicate_emb_npy_file = 3;
+
+  // Keep probability of dropout layers.
+  optional float dropout_keep_prob = 4 [default = 1.0];
+
+  // Hyperparameters for the fully-connected layers.
+  optional Hyperparams fc_hyperparams = 5;
 }
