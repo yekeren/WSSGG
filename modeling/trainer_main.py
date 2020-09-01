@@ -28,6 +28,9 @@ from google.protobuf import text_format
 from protos import pipeline_pb2
 from modeling import trainer
 
+flags.DEFINE_string('type', None,
+                    'Module type, reserved for distributed training.')
+
 flags.DEFINE_string('model_dir', None,
                     'Path to the directory which holds model checkpoints.')
 

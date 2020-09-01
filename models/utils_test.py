@@ -408,6 +408,17 @@ class UtilsTest(tf.test.TestCase):
     self.assertAllEqual(roughly_overlapped,
                         [roughly_overlapped_gt1, roughly_overlapped_gt2])
 
+  def test_sample_one_based_ids_not_equal(self):
+    source = tf.random.uniform([20, 5], minval=1, maxval=6, dtype=tf.int32)
+    self.assertEqual(tf.reduce_max(source).numpy(), 5)
+    self.assertEqual(tf.reduce_min(source).numpy(), 1)
+
+    for _ in range(5):
+      sampled = utils.sample_one_based_ids_not_equal(source, max_id=5)
+      self.assertFalse(tf.reduce_any(sampled == source))
+      self.assertEqual(tf.reduce_max(sampled).numpy(), 5)
+      self.assertEqual(tf.reduce_min(sampled).numpy(), 1)
+
 
 if __name__ == '__main__':
   tf.test.main()

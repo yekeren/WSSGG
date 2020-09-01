@@ -25,4 +25,50 @@ message MaxPathSum {
 
   // Hyperparameters for the fully-connected layers.
   optional Hyperparams fc_hyperparams = 5;
+
+  // Maximum number of proposals to use.
+  optional uint32 max_n_proposal = 6 [default = 300];
+
+  // If true, use a linear modeling, otherwise, use a 2-layer model.
+  optional bool linear_modeling = 7 [default = true];
+
+  // IoU threshold to process non-max-suppression.
+  optional float iou_threshold = 8 [default = 0.5];
+
+  // Type of the non-max-suppression loss.
+  optional NMSLoss nms_loss = 9;
+
+  // Weight of the nms loss.
+  optional float nms_loss_weight = 10 [default = 1.0];
+
+  // If true, also train word embedding.
+  optional bool train_word_embedding = 11 [default = false];
+
+  // If true, sample negative path to compute the loss.
+  optional bool sample_negative_path = 12 [default = false];
+}
+
+message NMSLoss {
+  oneof nms_loss_oneof {
+    NoLoss no_loss = 1;
+    TripletLoss triplet_loss = 2;
+    L2Loss l2_loss = 3;
+    L2DistillationLoss l2_distillation_loss = 4;
+  }
+}
+
+message NoLoss {
+}
+
+message TripletLoss {
+  optional float margin = 1 [default = 0.4];
+}
+
+message L2Loss {
+  optional float positive_weight = 1 [default = 1.0];
+  optional float negative_weight = 2 [default = 1.0];
+}
+
+message L2DistillationLoss {
+  optional float weight = 1 [default = 1.0];
 }

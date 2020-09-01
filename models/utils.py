@@ -120,9 +120,10 @@ def gather_grounded_proposal_box(proposals, proposal_index):
   batch = proposals.shape[0].value
   max_n_triple = tf.shape(proposal_index)[1]
   max_n_proposal = tf.shape(proposals)[1]
+  dims = proposals.shape[-1].value
 
   proposals = tf.broadcast_to(tf.expand_dims(proposals, 1),
-                              [batch, max_n_triple, max_n_proposal, 4])
+                              [batch, max_n_triple, max_n_proposal, dims])
 
   batch_index = tf.broadcast_to(tf.expand_dims(tf.range(batch), 1),
                                 [batch, max_n_triple])
@@ -132,6 +133,10 @@ def gather_grounded_proposal_box(proposals, proposal_index):
   return tf.gather_nd(proposals, index)
 
 
+# Identical function, rename it.
+gather_grounded_proposal_embeddings = gather_grounded_proposal_box
+
+
 def gather_overlapped_box_indicator_by_iou(n_proposal,
                                            proposals,
                                            n_reference,
@@ -139,8 +144,8 @@ def gather_overlapped_box_indicator_by_iou(n_proposal,
                                            threshold=0.5):
   """Gathers overlapped proposal boxes and split into two sets.
 
-    Proposals have IoU >= threshold will be gathered in the `highly_overlapped_proposals`.
-    Proposals have IoU < threshold will be gathered in the `roughly_overlapped_proposals`.
+    Proposals have IoU >= threshold will be denoted in the `highly_overlapped`.
+    Proposals have IoU < threshold will be denoted in the `roughly_overlapped`.
 
   Args:
     n_proposal: A [batch] int tensor, number of proposals.
@@ -172,3 +177,66 @@ def gather_overlapped_box_indicator_by_iou(n_proposal,
   roughly_overlapped = tf.logical_and(tf.math.greater(iou, 0.0),
                                       tf.math.less(iou, threshold))
   return highly_overlapped, roughly_overlapped
+
+
+def compute_nms_l2_distillation_loss(entity_embs, proposal_embs,
+                                     proposal_indicator):
+  """Computes non-max-suppresion l2 distillation loss.
+
+  Args:
+    entity_embs: Subject or object embeddings of shape [batch, max_n_triple, dims].
+    proposal_embs: A [batch, max_n_proposal, dims] float tensor.
+    proposal_indicator: A boolean tensor denoting the matching relation, 
+      shape=[batch, max_n_triple, max_n_proposal], should be the returned
+      `highly_overlapped` of `gather_overlapped_box_indicator_by_iou`.
+
+  Returns:
+    A scalar tensor denoting the loss.
+  """
+  (batch, dims) = (entity_embs.shape[0].value, entity_embs.shape[-1].value)
+  max_n_triple = tf.shape(entity_embs)[1]
+  max_n_proposal = tf.shape(proposal_embs)[1]
+
+  # Broadcast shape.
+  (entity_embs, proposal_embs) = (tf.expand_dims(entity_embs, 2),
+                                  tf.expand_dims(proposal_embs, 1))
+  entity_embs = tf.broadcast_to(entity_embs,
+                                [batch, max_n_triple, max_n_proposal, dims])
+  proposal_embs = tf.broadcast_to(proposal_embs,
+                                  [batch, max_n_triple, max_n_proposal, dims])
+
+  proposal_indicator = tf.expand_dims(proposal_indicator, -1)
+  proposal_indicator = tf.broadcast_to(
+      proposal_indicator, [batch, max_n_triple, max_n_proposal, dims])
+  proposal_indicator = tf.cast(proposal_indicator, tf.float32)
+
+  # L2 distance.
+  l2_sum = tf.reduce_sum(
+      tf.square(entity_embs - proposal_embs) * proposal_indicator)
+  l2_avg = tf.math.divide(l2_sum,
+                          tf.maximum(1e-10, tf.reduce_sum(proposal_indicator)))
+  return l2_avg
+
+
+def sample_one_based_ids_not_equal(ids, max_id=100):
+  """Random sample one based ids NOT equal to `ids`.
+
+  Args:
+    ids: A [batch, max_n_triple] int tensor. 
+    max_id: Max id value.
+
+  Returns:
+    sampled_id: A [batch, max_n_triple] int tensor, each entry has value in
+      [1...max_id] and should not be equal to the value in `ids`.
+  """
+  batch = ids.shape[0].value
+  max_n_triple = tf.shape(ids)[1]
+
+  # `offset`  values are in [1, max_id - 1].
+  offset = tf.random.uniform([batch, max_n_triple],
+                             minval=1,
+                             maxval=max_id,
+                             dtype=tf.int32)
+  # Note `ids` starts with 1.
+  sampled_ids = tf.mod(ids - 1 + offset, max_id) + 1
+  return sampled_ids

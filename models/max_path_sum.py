@@ -33,13 +33,8 @@ from modeling.utils import box_ops
 from modeling.utils import hyperparams
 from modeling.utils import masked_ops
 
-from models import core
 from models import model_base
 from models import utils
-
-
-def _l2_norm(x):
-  return x / np.maximum(1e-10, np.linalg.norm(x, axis=-1, keepdims=True))
 
 
 class MaxPathSum(model_base.ModelBase):
@@ -51,7 +46,7 @@ class MaxPathSum(model_base.ModelBase):
     if not isinstance(options, model_pb2.MaxPathSum):
       raise ValueError('Options has to be an MaxPathSum proto.')
 
-    # Load token2id mapping and embedding data.
+    # Load token2id mapping and pre-trained word embedding weights.
     with tf.io.gfile.GFile(options.token_to_id_meta_file, 'r') as fid:
       meta = json.load(fid)
       (entity2id, predicate2id) = (meta['label_to_idx'],
@@ -63,9 +58,6 @@ class MaxPathSum(model_base.ModelBase):
      self.predicate_emb_weights) = (np.load(options.entity_emb_npy_file),
                                     np.load(options.predicate_emb_npy_file))
 
-    (self.entity_emb_weights,
-     self.predicate_emb_weights) = (_l2_norm(self.entity_emb_weights),
-                                    _l2_norm(self.predicate_emb_weights))
     logging.info('Load embedding matrix: entity shape=%s, predicate shape=%s',
                  self.entity_emb_weights.shape,
                  self.predicate_emb_weights.shape)
@@ -74,7 +66,32 @@ class MaxPathSum(model_base.ModelBase):
     self.arg_scope_fn = hyperparams.build_hyperparams(options.fc_hyperparams,
                                                       is_training)
 
-  def _predict_relation_embeddings(self, proposal_embs, output_dims):
+  def _trim_proposals_to_limit(self, inputs, limit):
+    """Trims proposals to the `limit` denoted.
+
+    Args:
+      inputs: A dictionary of input tensors keyed by names.
+        - `image/n_proposal`: A [batch] int32 tensor.
+        - `image/proposal`: A [batch, max_n_proposal, 4] float tensor.
+        - `image/proposal/feature`: A [batch, max_proposal, feature_dims] float tensor.
+      limit:
+        Maximum number of proposals to be used.
+
+    Returns:
+      Same `inputs` object.
+    """
+    inputs.update({
+        'image/n_proposal':
+            tf.minimum(inputs['image/n_proposal'], self.options.max_n_proposal),
+        'image/proposal':
+            inputs['image/proposal'][:, :self.options.max_n_proposal, :],
+        'image/proposal/feature':
+            inputs['image/proposal/feature']
+            [:, :self.options.max_n_proposal, :],
+    })
+    return inputs
+
+  def _predict_relation_embeddings(self, proposal_embs, output_dims, scope):
     """Predicts edge embeddings.
 
     `edge_emb = linear(concat(node1_emb, node2_emb))`
@@ -101,7 +118,8 @@ class MaxPathSum(model_base.ModelBase):
     with slim.arg_scope(self.arg_scope_fn()):
       edge_embs = slim.fully_connected(edge_embs,
                                        num_outputs=output_dims,
-                                       activation_fn=None)
+                                       activation_fn=None,
+                                       scope=scope)
     return edge_embs
 
   def predict(self, inputs, **kwargs):
@@ -123,7 +141,7 @@ class MaxPathSum(model_base.ModelBase):
     Returns:
       predictions: A dictionary of prediction tensors keyed by name.
     """
-    # The following tensors can only be used for evaluation/visualization:
+    # Ground-truth boxes can only be used for evaluation/visualization:
     # - `scene_graph/subject/box`
     # - `scene_graph/object/box`
 
@@ -141,34 +159,43 @@ class MaxPathSum(model_base.ModelBase):
                        self.entity2id(inputs['scene_graph/subject']),
                        self.entity2id(inputs['scene_graph/object']),
                        self.predicate2id(inputs['scene_graph/predicate']))
-    (entity_emb_weights,
-     predicate_emb_weights) = (tf.Variable(self.entity_emb_weights, False),
-                               tf.Variable(self.predicate_emb_weights, False))
+    entity_emb_weights = tf.nn.l2_normalize(
+        tf.compat.v1.Variable(self.entity_emb_weights,
+                              self.options.train_word_embedding,
+                              name='embedding_weights/entity'), -1)
+    predicate_emb_weights = tf.nn.l2_normalize(
+        tf.compat.v1.Variable(self.predicate_emb_weights,
+                              self.options.train_word_embedding,
+                              name='embedding_weights/predicate'), -1)
     (subject_embs, object_embs,
      predicate_embs) = (tf.nn.embedding_lookup(entity_emb_weights, subject_ids),
                         tf.nn.embedding_lookup(entity_emb_weights, object_ids),
                         tf.nn.embedding_lookup(predicate_emb_weights,
                                                predicate_ids))
 
-    # Get proposals_embs.
+    dims = subject_embs.shape[-1].value
+
+    # Get proposals_embs, trim to limit number.
     # - proposal_embs = [batch, max_n_proposal, dims]
+    self._trim_proposals_to_limit(inputs, limit=self.options.max_n_proposal)
+
     (n_proposal, proposals,
      proposal_features) = (inputs['image/n_proposal'], inputs['image/proposal'],
                            inputs['image/proposal/feature'])
 
-    dims = subject_embs.shape[-1].value
     with slim.arg_scope(self.arg_scope_fn()):
-      proposal_features = slim.fully_connected(proposal_features,
-                                               num_outputs=dims,
-                                               activation_fn=tf.nn.relu6)
-      proposal_features = slim.dropout(proposal_features,
-                                       self.options.dropout_keep_prob,
-                                       is_training=self.is_training)
+      if not self.options.linear_modeling:  # Additional FC.
+        proposal_features = slim.fully_connected(proposal_features,
+                                                 num_outputs=dims,
+                                                 activation_fn=tf.nn.leaky_relu)
+        proposal_features = slim.dropout(proposal_features,
+                                         self.options.dropout_keep_prob,
+                                         is_training=self.is_training)
       proposal_embs = slim.fully_connected(proposal_features,
                                            num_outputs=dims,
-                                           activation_fn=None)
-
-    proposal_embs = tf.nn.l2_normalize(proposal_embs, axis=-1)
+                                           activation_fn=None,
+                                           scope="proposal_embs")
+      proposal_embs = tf.nn.l2_normalize(proposal_embs, axis=-1)
 
     # Create matching graph.
     # - subject_to_proposal = [batch, max_n_triple, max_n_proposal]
@@ -183,38 +210,41 @@ class MaxPathSum(model_base.ModelBase):
                                           proposal_embs,
                                           transpose_b=True)
 
-    proposal_semantic_relation_embs = self._predict_relation_embeddings(
-        proposal_features, output_dims=dims)
-    proposal_spatial_relation_embs = self._predict_relation_embeddings(
-        proposals, output_dims=dims)
-
-    proposal_relation_embs = tf.add(proposal_semantic_relation_embs,
-                                    proposal_spatial_relation_embs)
+    proposal_relation_embs = tf.add(
+        self._predict_relation_embeddings(proposal_features,
+                                          output_dims=dims,
+                                          scope="semantic_relation_embs"),
+        self._predict_relation_embeddings(proposals,
+                                          output_dims=dims,
+                                          scope="spatial_relation_embs"))
     proposal_relation_embs = tf.nn.l2_normalize(proposal_relation_embs, axis=-1)
     proposal_to_proposal = tf.einsum('bpqd,btd->btpq', proposal_relation_embs,
                                      predicate_embs)
 
     # Compute maximum path sum and gather proposals using the index.
+    # - pseudo_subject_box = [batch, max_n_triple, 4]
+    # - pseudo_object_box = [batch, max_n_triple, 4]
     (max_path_sum, subject_proposal_index,
-     object_proposal_index) = core.compute_max_path_sum(n_proposal, n_triple,
-                                                        subject_to_proposal,
-                                                        proposal_to_proposal,
-                                                        proposal_to_object)
-    pseudo_subject_box = utils.gather_grounded_proposal_box(
-        proposals, subject_proposal_index)
-    pseudo_object_box = utils.gather_grounded_proposal_box(
-        proposals, object_proposal_index)
+     object_proposal_index) = utils.compute_max_path_sum(
+         n_proposal, n_triple, subject_to_proposal, proposal_to_proposal,
+         proposal_to_object)
+    ps_subject_box = utils.gather_grounded_proposal_box(proposals,
+                                                        subject_proposal_index)
+    ps_object_box = utils.gather_grounded_proposal_box(proposals,
+                                                       object_proposal_index)
 
-    return {
-        'max_path_sum/max_path_sum': max_path_sum,
-        'max_path_sum/pseudo_subject_box': pseudo_subject_box,
-        'max_path_sum/pseudo_object_box': pseudo_object_box,
+    predictions = {
+        'max_path_sum/graph_embs/proposal': proposal_embs,
+        'max_path_sum/graph_embs/proposal_relation': proposal_relation_embs,
         'max_path_sum/graph_weights/subject_to_proposal': subject_to_proposal,
         'max_path_sum/graph_weights/proposal_to_proposal': proposal_to_proposal,
         'max_path_sum/graph_weights/proposal_to_object': proposal_to_object,
-        'max_path_sum/graph_embs/proposal': proposal_embs,
-        'max_path_sum/graph_embs/proposal_relation': proposal_relation_embs,
+        'max_path_sum/dp_solution/max_path_sum': max_path_sum,
+        'max_path_sum/dp_solution/pseudo_subject_box': ps_subject_box,
+        'max_path_sum/dp_solution/pseudo_object_box': ps_object_box,
     }
+
+    return predictions
 
   def build_losses(self, inputs, predictions, **kwargs):
     """Computes loss tensors.
@@ -244,13 +274,23 @@ class MaxPathSum(model_base.ModelBase):
     Returns:
       loss_dict: A dictionary of loss tensors keyed by names.
     """
-    (n_triple) = (inputs['scene_graph/n_triple'])
-    (max_path_sum, ps_subject_box,
-     ps_object_box) = (predictions['max_path_sum/max_path_sum'],
-                       predictions['max_path_sum/pseudo_subject_box'],
-                       predictions['max_path_sum/pseudo_object_box'])
+    (n_proposal, proposals,
+     n_triple) = (inputs['image/n_proposal'], inputs['image/proposal'],
+                  inputs['scene_graph/n_triple'])
+    (max_path_sum, ps_subject_box, ps_object_box, subject_to_proposal,
+     proposal_to_proposal, proposal_to_object, proposal_embs,
+     proposal_relation_embs) = (
+         predictions['max_path_sum/dp_solution/max_path_sum'],
+         predictions['max_path_sum/dp_solution/pseudo_subject_box'],
+         predictions['max_path_sum/dp_solution/pseudo_object_box'],
+         predictions['max_path_sum/graph_weights/subject_to_proposal'],
+         predictions['max_path_sum/graph_weights/proposal_to_proposal'],
+         predictions['max_path_sum/graph_weights/proposal_to_object'],
+         predictions['max_path_sum/graph_embs/proposal'],
+         predictions['max_path_sum/graph_embs/proposal_relation'],
+     )
 
-    # Get the triple mask.
+    # `triple_mask`, shape=[batch, max_n_triple].
     triple_mask = tf.sequence_mask(n_triple,
                                    tf.shape(max_path_sum)[1],
                                    dtype=tf.float32)
@@ -260,7 +300,10 @@ class MaxPathSum(model_base.ModelBase):
         masked_ops.masked_avg(max_path_sum, mask=triple_mask, dim=1))
     max_path_sum_loss = -mean_max_path_sum
 
-    return {'metrics/path_sum_loss': max_path_sum_loss}
+    loss_dict = {
+        'metrics/path_sum_loss': max_path_sum_loss,
+    }
+    return loss_dict
 
   def build_metrics(self, inputs, predictions, **kwargs):
     """Computes evaluation metrics.
@@ -292,29 +335,72 @@ class MaxPathSum(model_base.ModelBase):
         results of calling a metric function, namely a (metric_tensor, 
         update_op) tuple. see tf.metrics for details.
     """
-    (n_triple, gt_subject_box,
-     gt_object_box) = (inputs['scene_graph/n_triple'],
+    (n_proposal, proposals, n_triple, gt_subject_box,
+     gt_object_box) = (inputs['image/n_proposal'], inputs['image/proposal'],
+                       inputs['scene_graph/n_triple'],
                        inputs['scene_graph/subject/box'],
                        inputs['scene_graph/object/box'])
 
-    (max_path_sum, ps_subject_box,
-     ps_object_box) = (predictions['max_path_sum/max_path_sum'],
-                       predictions['max_path_sum/pseudo_subject_box'],
-                       predictions['max_path_sum/pseudo_object_box'])
+    (max_path_sum, ps_subject_box, ps_object_box, subject_to_proposal,
+     proposal_to_proposal, proposal_to_object) = (
+         predictions['max_path_sum/dp_solution/max_path_sum'],
+         predictions['max_path_sum/dp_solution/pseudo_subject_box'],
+         predictions['max_path_sum/dp_solution/pseudo_object_box'],
+         predictions['max_path_sum/graph_weights/subject_to_proposal'],
+         predictions['max_path_sum/graph_weights/proposal_to_proposal'],
+         predictions['max_path_sum/graph_weights/proposal_to_object'],
+     )
 
-    # Get the triple mask.
-    triple_mask = tf.sequence_mask(n_triple,
-                                   tf.shape(max_path_sum)[1],
-                                   dtype=tf.float32)
+    # Compute positive and negative similarity metric ops.
+    # - ps_subject_box_highly_overlapped = boolean [batch, max_n_triple, max_n_proposal]
+    # - ps_subject_box_roughly_overlapped = boolean [batch, max_n_triple, max_n_proposal]
+    # - sim_sub_positives = [sum(ps_subject_box_highly_overlapped)]
+    # - sim_sub_negatives = [sum(ps_subject_box_roughly_overlapped)]
+    (ps_subject_box_highly_overlapped, ps_subject_box_roughly_overlapped
+    ) = utils.gather_overlapped_box_indicator_by_iou(
+        n_proposal,
+        proposals,
+        n_reference=n_triple,
+        reference=ps_subject_box,
+        threshold=self.options.iou_threshold)
+    (ps_object_box_highly_overlapped, ps_object_box_roughly_overlapped
+    ) = utils.gather_overlapped_box_indicator_by_iou(
+        n_proposal,
+        proposals,
+        n_reference=n_triple,
+        reference=ps_object_box,
+        threshold=self.options.iou_threshold)
 
-    # IoU.
+    (subject_nms_pos_sim, subject_nms_neg_sim, object_nms_pos_sim,
+     object_nms_neg_sim) = (tf.boolean_mask(subject_to_proposal,
+                                            ps_subject_box_highly_overlapped),
+                            tf.boolean_mask(subject_to_proposal,
+                                            ps_subject_box_roughly_overlapped),
+                            tf.boolean_mask(proposal_to_object,
+                                            ps_object_box_highly_overlapped),
+                            tf.boolean_mask(proposal_to_object,
+                                            ps_object_box_roughly_overlapped))
+
+    (mean_subject_nms_pos_sim, mean_subject_nms_neg_sim,
+     mean_object_nms_pos_sim,
+     mean_object_nms_neg_sim) = (tf.keras.metrics.Mean(),
+                                 tf.keras.metrics.Mean(),
+                                 tf.keras.metrics.Mean(),
+                                 tf.keras.metrics.Mean())
+    mean_subject_nms_pos_sim.update_state(tf.reduce_mean(subject_nms_pos_sim))
+    mean_subject_nms_neg_sim.update_state(tf.reduce_mean(subject_nms_neg_sim))
+    mean_object_nms_pos_sim.update_state(tf.reduce_mean(object_nms_pos_sim))
+    mean_object_nms_neg_sim.update_state(tf.reduce_mean(object_nms_neg_sim))
+
+    # Compute IoU and max-path-sum metric ops.
     (subject_iou, object_iou) = (box_ops.iou(gt_subject_box, ps_subject_box),
                                  box_ops.iou(gt_object_box, ps_object_box))
 
-    # Compute metric ops.
+    triple_mask = tf.sequence_mask(n_triple,
+                                   tf.shape(max_path_sum)[1],
+                                   dtype=tf.float32)
     _mean_fn = lambda x: tf.reduce_mean(
         masked_ops.masked_avg(x, mask=triple_mask, dim=1))
-
     (mean_max_path_sum, mean_subject_iou,
      mean_object_iou) = (tf.keras.metrics.Mean(), tf.keras.metrics.Mean(),
                          tf.keras.metrics.Mean())
@@ -326,5 +412,9 @@ class MaxPathSum(model_base.ModelBase):
     return {
         'metrics/max_path_sum': mean_max_path_sum,
         'metrics/iou_subject': mean_subject_iou,
-        'metrics/iou_object': mean_object_iou
+        'metrics/iou_object': mean_object_iou,
+        'metrics/subject_nms_pos_sim': mean_subject_nms_pos_sim,
+        'metrics/subject_nms_neg_sim': mean_subject_nms_neg_sim,
+        'metrics/object_nms_pos_sim': mean_object_nms_pos_sim,
+        'metrics/object_nms_neg_sim': mean_object_nms_neg_sim,
     }

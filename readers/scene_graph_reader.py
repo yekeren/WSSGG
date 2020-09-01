@@ -122,13 +122,24 @@ def _create_dataset(options, is_training, input_pipeline_context=None):
   """
   dataset = tf.data.Dataset.list_files(options.input_pattern[:],
                                        shuffle=is_training)
+
+  batch_size = options.batch_size
+  if input_pipeline_context:
+    if input_pipeline_context.num_input_pipelines > 1:
+      dataset = dataset.shard(input_pipeline_context.num_input_pipelines,
+                              input_pipeline_context.input_pipeline_id)
+      logging.info('Input pipeline %i/%i.',
+                   input_pipeline_context.input_pipeline_id,
+                   input_pipeline_context.num_input_pipelines)
+    batch_size = input_pipeline_context.get_per_replica_batch_size(
+        options.batch_size)
+
   dataset = dataset.interleave(tf.data.TFRecordDataset,
                                cycle_length=options.interleave_cycle_length)
 
   parse_fn = lambda x: _parse_single_example(x, options)
   dataset = dataset.map(map_func=parse_fn,
                         num_parallel_calls=options.num_parallel_calls)
-  dataset = dataset.cache()
 
   if is_training:
     dataset = dataset.repeat()
@@ -146,7 +157,7 @@ def _create_dataset(options, is_training, input_pipeline_context=None):
       'scene_graph/object': [None],
       'scene_graph/object/box': [None, 4],
   }
-  dataset = dataset.padded_batch(options.batch_size,
+  dataset = dataset.padded_batch(batch_size,
                                  padded_shapes=padded_shapes,
                                  drop_remainder=True)
   dataset = dataset.prefetch(options.prefetch_buffer_size)
