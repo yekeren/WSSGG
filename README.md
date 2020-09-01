@@ -38,7 +38,9 @@ sh download_and_prepare_vspnet_experiments.sh "data-vspnet"
 To check the validity of the generated .tfrecord files, run 
 
 ```
-python "readers/scene_graph_reader_demo.py"
+python "readers/scene_graph_reader_demo.py" \
+  --image_directory "data-vspnet/images"
+  --tf_record_file PATH_TO_THE_FILE
 ```
 
 ## Training
