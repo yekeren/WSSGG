@@ -39,7 +39,7 @@ To check the validity of the generated .tfrecord files, run
 
 ```
 python "readers/scene_graph_reader_demo.py" \
-  --image_directory "data-vspnet/images"
+  --image_directory "data-vspnet/images" \
   --tf_record_file PATH_TO_THE_FILE
 ```
 
