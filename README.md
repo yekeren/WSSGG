@@ -27,6 +27,20 @@ sh build.sh
 
 ## Preparing datasets
 
+We provide scripts and tools to set up experiments identical to the Zareian et al., CVPR2020. We download proposal boxes, box features, and preprocessed data annotation splits from their git repository. For more information, please refer to [their repository](https://github.com/alirezazareian/vspnet).
+
+The following scripts shall download the data needed and generate .tfrecord files under the "./data-vspnet/tfrecords" directory.
+
+```
+sh download_and_prepare_vspnet_experiments.sh "data-vspnet"
+```
+
+To check the validity of the generated .tfrecord files, run 
+
+```
+python "readers/scene_graph_reader_demo.py"
+```
+
 ## Training
 
 ## Evaluation
