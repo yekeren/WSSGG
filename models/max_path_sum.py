@@ -43,8 +43,10 @@ class MaxPathSum(model_base.ModelBase):
   def __init__(self, options, is_training):
     super(MaxPathSum, self).__init__(options, is_training)
 
-    if not isinstance(options, model_pb2.MaxPathSum):
-      raise ValueError('Options has to be an MaxPathSum proto.')
+    if (not isinstance(options, model_pb2.MaxPathSum) and
+        not isinstance(options, model_pb2.MaxPathSumWithNegSampling)):
+      raise ValueError(
+          'Options has to be an MaxPathSum/MaxPathSumWithNegSampling proto.')
 
     # Load token2id mapping and pre-trained word embedding weights.
     with tf.io.gfile.GFile(options.token_to_id_meta_file, 'r') as fid:
@@ -106,15 +108,15 @@ class MaxPathSum(model_base.ModelBase):
                      proposal_embs.shape[-1].value)
     max_n_proposal = tf.shape(proposal_embs)[1]
 
-    proposal_embs_1 = tf.expand_dims(proposal_embs, 1)
-    proposal_embs_2 = tf.expand_dims(proposal_embs, 2)
+    proposal_embs_1 = tf.broadcast_to(tf.expand_dims(
+        proposal_embs, 1), [batch, max_n_proposal, max_n_proposal, dims])
+    proposal_embs_2 = tf.broadcast_to(tf.expand_dims(
+        proposal_embs, 2), [batch, max_n_proposal, max_n_proposal, dims])
 
-    proposal_embs_1 = tf.broadcast_to(
-        proposal_embs_1, [batch, max_n_proposal, max_n_proposal, dims])
-    proposal_embs_2 = tf.broadcast_to(
-        proposal_embs_2, [batch, max_n_proposal, max_n_proposal, dims])
-
-    edge_embs = tf.concat([proposal_embs_1, proposal_embs_2], -1)
+    # edge_embs = tf.concat([proposal_embs_1, proposal_embs_2], -1)
+    edge_embs = tf.concat(
+        [proposal_embs_1, proposal_embs_2, proposal_embs_1 * proposal_embs_2],
+        -1)
     with slim.arg_scope(self.arg_scope_fn()):
       edge_embs = slim.fully_connected(edge_embs,
                                        num_outputs=output_dims,
@@ -149,7 +151,7 @@ class MaxPathSum(model_base.ModelBase):
       inputs.pop('scene_graph/subject/box')
       inputs.pop('scene_graph/object/box')
 
-    # Convert subject, object, predicate into embeddings.
+    # Convert subject, object, predicate into embedding vectors.
     # - subject_embs = [batch, max_n_triple, dims]
     # - object_embs = [batch, max_n_triple, dims]
     # - predicate_embs = [batch, max_n_triple, dims]
@@ -184,24 +186,25 @@ class MaxPathSum(model_base.ModelBase):
                            inputs['image/proposal/feature'])
 
     with slim.arg_scope(self.arg_scope_fn()):
-      if not self.options.linear_modeling:  # Additional FC.
-        proposal_features = slim.fully_connected(proposal_features,
-                                                 num_outputs=dims,
-                                                 activation_fn=tf.nn.leaky_relu)
-        proposal_features = slim.dropout(proposal_features,
-                                         self.options.dropout_keep_prob,
-                                         is_training=self.is_training)
-      proposal_embs = slim.fully_connected(proposal_features,
-                                           num_outputs=dims,
-                                           activation_fn=None,
-                                           scope="proposal_embs")
-      proposal_embs = tf.nn.l2_normalize(proposal_embs, axis=-1)
+      if not self.options.linear_modeling:  # Add an additional FC.
+        proposal_features = slim.dropout(
+            slim.fully_connected(proposal_features,
+                                 num_outputs=dims,
+                                 activation_fn=tf.nn.leaky_relu),
+            self.options.dropout_keep_prob,
+            is_training=self.is_training)
+
+      proposal_embs = tf.nn.l2_normalize(
+          slim.fully_connected(proposal_features,
+                               num_outputs=dims,
+                               activation_fn=None,
+                               scope="proposal_embs"), -1)
 
     # Create matching graph.
     # - subject_to_proposal = [batch, max_n_triple, max_n_proposal]
     # - proposal_to_object = [batch, max_n_triple, max_n_proposal]
     # - proposal_to_proposal = [batch, max_n_triple, max_n_proposal, max_n_proposal]
-    # - proposal_to_proposal_embs = [batch, max_n_triple, max_n_proposal, dims]
+    # - proposal_relation_embs = [batch, max_n_proposal, max_n_proposal, dims]
 
     subject_to_proposal = tf.linalg.matmul(subject_embs,
                                            proposal_embs,
@@ -221,19 +224,36 @@ class MaxPathSum(model_base.ModelBase):
     proposal_to_proposal = tf.einsum('bpqd,btd->btpq', proposal_relation_embs,
                                      predicate_embs)
 
-    # Compute maximum path sum and gather proposals using the index.
+    # Compute maximum path sum and gather solutions using the index.
     # - pseudo_subject_box = [batch, max_n_triple, 4]
+    # - pseudo_subject_box_embs = [batch, max_n_triple, dims]
     # - pseudo_object_box = [batch, max_n_triple, 4]
+    # - pseudo_object_box_embs = [batch, max_n_triple, dims]
     (max_path_sum, subject_proposal_index,
      object_proposal_index) = utils.compute_max_path_sum(
          n_proposal, n_triple, subject_to_proposal, proposal_to_proposal,
          proposal_to_object)
-    ps_subject_box = utils.gather_grounded_proposal_box(proposals,
-                                                        subject_proposal_index)
-    ps_object_box = utils.gather_grounded_proposal_box(proposals,
-                                                       object_proposal_index)
 
+    _get_proposal_solution = lambda x, i: utils.gather_proposal_by_index(x, i)
+
+    (ps_subject_box, ps_subject_box_embs, ps_object_box,
+     ps_object_box_embs) = (_get_proposal_solution(proposals,
+                                                   subject_proposal_index),
+                            _get_proposal_solution(proposal_embs,
+                                                   subject_proposal_index),
+                            _get_proposal_solution(proposals,
+                                                   object_proposal_index),
+                            _get_proposal_solution(proposal_embs,
+                                                   object_proposal_index))
+    ps_relation_embs = utils.gather_relation_by_index(proposal_relation_embs,
+                                                      subject_proposal_index,
+                                                      object_proposal_index)
     predictions = {
+        'word_embedding/entity': entity_emb_weights,
+        'word_embedding/predicate': predicate_emb_weights,
+        'max_path_sum/graph_embs/subject': subject_embs,
+        'max_path_sum/graph_embs/object': object_embs,
+        'max_path_sum/graph_embs/predicate': predicate_embs,
         'max_path_sum/graph_embs/proposal': proposal_embs,
         'max_path_sum/graph_embs/proposal_relation': proposal_relation_embs,
         'max_path_sum/graph_weights/subject_to_proposal': subject_to_proposal,
@@ -241,7 +261,10 @@ class MaxPathSum(model_base.ModelBase):
         'max_path_sum/graph_weights/proposal_to_object': proposal_to_object,
         'max_path_sum/dp_solution/max_path_sum': max_path_sum,
         'max_path_sum/dp_solution/pseudo_subject_box': ps_subject_box,
+        'max_path_sum/dp_solution/pseudo_subject_box_embs': ps_subject_box_embs,
         'max_path_sum/dp_solution/pseudo_object_box': ps_object_box,
+        'max_path_sum/dp_solution/pseudo_object_box_embs': ps_object_box_embs,
+        'max_path_sum/dp_solution/pseudo_relation_embs': ps_relation_embs,
     }
 
     return predictions
@@ -262,9 +285,14 @@ class MaxPathSum(model_base.ModelBase):
         - `scene_graph/subject/box`: A [batch, max_n_triple, 4] float tensor.
         - `scene_graph/object/box`: A [batch, max_n_triple, 4] float tensor.
       predictions: A dictionary of prediction tensors keyed by name.
-        - `max_path_sum/max_path_sum`: A [batch, max_n_triple] float tensor.
-        - `max_path_sum/pseudo_subject_box`: A [batch, max_n_triple, 4] float tensor.
-        - `max_path_sum/pseudo_object_box`: A [batch, max_n_triple, 4] float tensor.
+        - `word_embedding/entity`: A [n_entity, dims] tensor.
+        - `word_embedding/predicate`: A [n_predicate, dims] tensor.
+        - `max_path_sum/dp_solution/max_path_sum`: A [batch, max_n_triple] float tensor.
+        - `max_path_sum/dp_solution/pseudo_subject_box`: A [batch, max_n_triple, 4] float tensor.
+        - `max_path_sum/dp_solution/pseudo_subject_box_embs`: A [batch, max_n_triple, dims] float tensor.
+        - `max_path_sum/dp_solution/pseudo_object_box`: A [batch, max_n_triple, 4] float tensor.
+        - `max_path_sum/dp_solution/pseudo_object_box_embs`: A [batch, max_n_triple, dims] float tensor.
+        - `max_path_sum/dp_solution/pseudo_relation_embs`: A [batch, max_n_triple, dims] float tensor.
         - `max_path_sum/graph_weights/subject_to_proposal`: A [batch, max_n_triple, max_n_proposal] float tensor.
         - `max_path_sum/graph_weights/proposal_to_proposal`: A [batch, max_n_triple, max_n_proposal, max_n_proposal] float tensor.
         - `max_path_sum/graph_weights/proposal_to_object`: A [batch, max_n_triple, max_n_proposal] float tensor.
@@ -274,36 +302,20 @@ class MaxPathSum(model_base.ModelBase):
     Returns:
       loss_dict: A dictionary of loss tensors keyed by names.
     """
-    (n_proposal, proposals,
-     n_triple) = (inputs['image/n_proposal'], inputs['image/proposal'],
-                  inputs['scene_graph/n_triple'])
-    (max_path_sum, ps_subject_box, ps_object_box, subject_to_proposal,
-     proposal_to_proposal, proposal_to_object, proposal_embs,
-     proposal_relation_embs) = (
-         predictions['max_path_sum/dp_solution/max_path_sum'],
-         predictions['max_path_sum/dp_solution/pseudo_subject_box'],
-         predictions['max_path_sum/dp_solution/pseudo_object_box'],
-         predictions['max_path_sum/graph_weights/subject_to_proposal'],
-         predictions['max_path_sum/graph_weights/proposal_to_proposal'],
-         predictions['max_path_sum/graph_weights/proposal_to_object'],
-         predictions['max_path_sum/graph_embs/proposal'],
-         predictions['max_path_sum/graph_embs/proposal_relation'],
-     )
+    n_triple = inputs['scene_graph/n_triple']
+    max_path_sum = predictions['max_path_sum/dp_solution/max_path_sum']
 
-    # `triple_mask`, shape=[batch, max_n_triple].
+    # Compute triple mask, shape=[batch, max_n_triple].
     triple_mask = tf.sequence_mask(n_triple,
                                    tf.shape(max_path_sum)[1],
                                    dtype=tf.float32)
 
-    # Max-path-sum loss.
     mean_max_path_sum = tf.reduce_mean(
         masked_ops.masked_avg(max_path_sum, mask=triple_mask, dim=1))
-    max_path_sum_loss = -mean_max_path_sum
 
-    loss_dict = {
-        'metrics/path_sum_loss': max_path_sum_loss,
+    return {
+        'metrics/path_sum_loss': -mean_max_path_sum,
     }
-    return loss_dict
 
   def build_metrics(self, inputs, predictions, **kwargs):
     """Computes evaluation metrics.
@@ -321,9 +333,14 @@ class MaxPathSum(model_base.ModelBase):
         - `scene_graph/subject/box`: A [batch, max_n_triple, 4] float tensor.
         - `scene_graph/object/box`: A [batch, max_n_triple, 4] float tensor.
       predictions: A dictionary of prediction tensors keyed by name.
-        - `max_path_sum/max_path_sum`: A [batch, max_n_triple] float tensor.
-        - `max_path_sum/pseudo_subject_box`: A [batch, max_n_triple, 4] float tensor.
-        - `max_path_sum/pseudo_object_box`: A [batch, max_n_triple, 4] float tensor.
+        - `word_embedding/entity`: A [n_entity, dims] tensor.
+        - `word_embedding/predicate`: A [n_predicate, dims] tensor.
+        - `max_path_sum/dp_solution/max_path_sum`: A [batch, max_n_triple] float tensor.
+        - `max_path_sum/dp_solution/pseudo_subject_box`: A [batch, max_n_triple, 4] float tensor.
+        - `max_path_sum/dp_solution/pseudo_subject_box_embs`: A [batch, max_n_triple, dims] float tensor.
+        - `max_path_sum/dp_solution/pseudo_object_box`: A [batch, max_n_triple, 4] float tensor.
+        - `max_path_sum/dp_solution/pseudo_object_box_embs`: A [batch, max_n_triple, dims] float tensor.
+        - `max_path_sum/dp_solution/pseudo_relation_embs`: A [batch, max_n_triple, dims] float tensor.
         - `max_path_sum/graph_weights/subject_to_proposal`: A [batch, max_n_triple, max_n_proposal] float tensor.
         - `max_path_sum/graph_weights/proposal_to_proposal`: A [batch, max_n_triple, max_n_proposal, max_n_proposal] float tensor.
         - `max_path_sum/graph_weights/proposal_to_object`: A [batch, max_n_triple, max_n_proposal] float tensor.

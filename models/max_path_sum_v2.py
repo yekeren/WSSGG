@@ -39,14 +39,14 @@ from models import utils
 embedding_lookup = tf.nn.embedding_lookup
 
 
-class WeaklySupervisedSceneGraph(model_base.ModelBase):
-  """WeaklySupervisedSceneGraph model to provide instance-level annotations. """
+class MaxPathSumV2(model_base.ModelBase):
+  """MaxPathSumV2 model to provide instance-level annotations. """
 
   def __init__(self, options, is_training):
-    super(WeaklySupervisedSceneGraph, self).__init__(options, is_training)
+    super(MaxPathSumV2, self).__init__(options, is_training)
 
-    if not isinstance(options, model_pb2.WeaklySupervisedSceneGraph):
-      raise ValueError('Options has to be an WeaklySupervisedSceneGraph proto.')
+    if not isinstance(options, model_pb2.MaxPathSumV2):
+      raise ValueError('Options has to be an MaxPathSumV2 proto.')
 
     # Load token2id mapping and pre-trained word embedding weights.
     with tf.io.gfile.GFile(options.token_to_id_meta_file, 'r') as fid:
@@ -97,19 +97,7 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
 
   def _multiple_relation_detection(self, n_proposal, proposals,
                                    proposal_features):
-    """Detects multiple relations given the ground-truth.
-
-      Multiple Relation Detection (MRD):
-      - attn_relation_given_predicate = [batch, max_n_proposal**2, n_predicate(p-gt)]
-          * Given that predicate p-gt exists, find the responsible relation i->j.
-          * For each p-gt: sum_{i,j} (attn_relation_given_predicate[i, j, p-gt]) = 1.
-      - logits_predicate_given_relation = [batch, max_n_proposal**2,
-        n_predicate(p-pred)].
-          * Logits to classify relation i->j.
-      - logits_predicate_given_predicate = [batch, n_predicate(p-gt), 
-        n_predicate(p-pred)].
-          * Given the predicate p-gt, predict the logits through optimizing the 
-            weighting `attn_relation_given_predicate`.
+    """Detects multiple relations given a pair of proposals.
 
     Args:
       n_proposal: A [batch] int tensor.
@@ -117,18 +105,14 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
       proposal_features: A [batch, max_n_proposal, feature_dims] float tensor.
 
     Returns:
-      attn_relation_given_predicate: Attention distribution of relations given
-        the predicate. shape=[batch, max_n_proposal**2, n_predicate].
-      logits_predicate_given_predicate: Predicate prediction.
-        shape=[batch, n_predicate, n_predicate].
+      logits_predicate_given_relation: A batch, max_n_proposal, max_n_proposal,
+        n_predicate] tensor.
     """
     batch = proposal_features.shape[0].value
     max_n_proposal = tf.shape(proposal_features)[1]
     proposal_masks = tf.sequence_mask(n_proposal,
                                       maxlen=max_n_proposal,
                                       dtype=tf.float32)
-
-    # Location features TODO.
 
     with slim.arg_scope(self.arg_scope_fn()):
       # Add an additional hidden layer to reduce feature dimensions.
@@ -150,81 +134,29 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
         tf.expand_dims(proposal_hiddens, 2),
         [batch, max_n_proposal, max_n_proposal, self.options.hidden_units])
 
-    # relation_features = tf.concat([
-    #     proposal_broadcast1, proposal_broadcast2,
-    #     tf.multiply(proposal_broadcast1, proposal_broadcast2)
-    # ], -1)
     relation_features = proposal_broadcast1 + proposal_broadcast2
-
-    # Two branches.
-    # - `relation_features` = [batch, max_n_proposal**2, dims].
-    # - `relation_masks` = [batch, max_n_proposal**2, 1].
-
-    dims = relation_features.shape[-1].value
-    relation_features = tf.reshape(
-        relation_features, [batch, max_n_proposal * max_n_proposal, dims])
 
     with slim.arg_scope(self.arg_scope_fn()):
       weights_initializer = tf.compat.v1.constant_initializer(
           self.predicate_emb_weights.transpose())
-      logits_relation_given_predicate = slim.fully_connected(
-          relation_features,
-          num_outputs=self.n_predicate,
-          activation_fn=None,
-          weights_initializer=weights_initializer,
-          scope='MRD/relation_branch1')
       logits_predicate_given_relation = slim.fully_connected(
           relation_features,
           num_outputs=self.n_predicate,
           activation_fn=None,
           weights_initializer=weights_initializer,
-          scope='MRD/relation_branch2')
+          scope='MRD/relation')
 
-    relation_masks = tf.multiply(tf.expand_dims(proposal_masks, 1),
-                                 tf.expand_dims(proposal_masks, 2))
-    relation_masks = tf.reshape(relation_masks,
-                                [batch, max_n_proposal * max_n_proposal, 1])
-
-    # Compute MRD results.
-    # - `attn_relation_given_predicate` = [batch,  max_n_proposal**2, n_predicate].
-    # - `logits_predicate_given_predicate` = [batch,  n_predicate, n_predicate].
-    attn_relation_given_predicate = masked_ops.masked_softmax(
-        logits_relation_given_predicate, relation_masks, dim=1)
-
-    logits_predicate_given_predicate = tf.matmul(
-        attn_relation_given_predicate,
-        logits_predicate_given_relation,
-        transpose_a=True)
-
-    detection_score = tf.multiply(
-        attn_relation_given_predicate,
-        tf.nn.softmax(logits_predicate_given_relation))
-
-    #detection_score = attn_relation_given_predicate
-    return detection_score, logits_predicate_given_predicate
+    return logits_predicate_given_relation
 
   def _multiple_entity_detection(self, n_proposal, proposal_features):
     """Detects multiple entities given the ground-truth.
-
-      Multiple Entity Detection (MED):
-      - attn_proposal_given_entity = [batch, max_n_proposal, n_entity(e-gt)].
-          * Given that entity e-gt exists, find the responsible proposal r.
-          * For each e-gt: sum_{r} (attn_proposal_given_entity[r, e-gt]) = 1.
-      - logits_entity_given_proposal = [batch, max_n_proposal n_entity(e-pred)],
-          * Logits to classify proposal r.
-      - logits_entity_given_entity = [batch, n_entity(e-gt), n_entity(e-pred)].
-          * Given the entity e-gt, predict the logits through optimizing the
-            weighting `attn_proposal_given_entity`.
 
     Args:
       n_proposal: A [batch] int tensor.
       proposal_features: A [batch, max_n_proposal, feature_dims] float tensor.
 
     Returns:
-      attn_proposal_given_entity: Attention distribution of proposals given the
-        entities. shape=[batch, max_n_proposal, n_entity]
-      logits_entity_given_entity: Entity prediction.
-        shape=[batch, n_entity, n_entity]
+      logits_entity_given_proposal: [batch, max_n_proposal, n_entity].
     """
     max_n_proposal = tf.shape(proposal_features)[1]
     proposal_masks = tf.sequence_mask(n_proposal,
@@ -243,36 +175,17 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
                                       self.options.dropout_keep_prob,
                                       is_training=self.is_training)
 
-      # Two branches.
       weights_initializer = tf.compat.v1.constant_initializer(
           self.entity_emb_weights.transpose())
-      logits_proposal_given_entity = slim.fully_connected(
-          proposal_hiddens,
-          num_outputs=self.n_entity,
-          activation_fn=None,
-          weights_initializer=weights_initializer,
-          biases_initializer=None,
-          scope="MED/proposal_branch1")
       logits_entity_given_proposal = slim.fully_connected(
           proposal_hiddens,
           num_outputs=self.n_entity,
           activation_fn=None,
           weights_initializer=weights_initializer,
           biases_initializer=None,
-          scope="MED/proposal_branch2")
+          scope="MED/entity")
 
-    attn_proposal_given_entity = masked_ops.masked_softmax(
-        logits_proposal_given_entity,
-        mask=tf.expand_dims(proposal_masks, -1),
-        dim=1)
-    logits_entity_given_entity = tf.matmul(attn_proposal_given_entity,
-                                           logits_entity_given_proposal,
-                                           transpose_a=True)
-
-    detection_score = tf.multiply(attn_proposal_given_entity,
-                                  tf.nn.softmax(logits_entity_given_proposal))
-    #detection_score = tf.nn.softmax(logits_entity_given_proposal)
-    return detection_score, logits_entity_given_entity
+    return logits_entity_given_proposal
 
   def predict(self, inputs, **kwargs):
     """Predicts the resulting tensors.
@@ -318,20 +231,15 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
                                       dtype=tf.float32)
 
     # Multiple Entity Detection (MED).
-    # - `attn_proposal_given_entity denotes the importance of region given the existence
-    #    of the ground-truth entity `e`.
-    #     * shape=[batch, max_n_proposal, n_entity].
-    # - `logits_entity_given_entity` is the prediction of entity given
-    #    the ground-truth entity, with the internal attention adjusted.
-    #     * shape=[batch, n_entity, n_entity]
-    (attn_proposal_given_entity,
-     logits_entity_given_entity) = self._multiple_entity_detection(
-         n_proposal, proposal_features)
+    # - `logits_entity_given_proposal` = [batch, max_n_propoosal, n_entity].
+    logits_entity_given_proposal = self._multiple_entity_detection(
+        n_proposal, proposal_features)
 
-    # # Multiple Relation detection network.
-    (attn_relation_given_predicate,
-     logits_predicate_given_predicate) = self._multiple_relation_detection(
-         n_proposal, proposals, proposal_features)
+    # Multiple Relation detection network.
+    # - `logits_predicate_given_relation` = [batch, max_n_propoosal,
+    #    max_n_proposal, n_predicate].
+    logits_predicate_given_relation = self._multiple_relation_detection(
+        n_proposal, proposals, proposal_features)
 
     # Parse the image-level scene-graph.
     n_triple = inputs['scene_graph/n_triple']
@@ -356,54 +264,55 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
     predicate_index = tf.stack(
         [batch_index, tf.maximum(0, predicate_ids - 1)], -1)
 
-    # Get the MIDN prediction.
-    # - `subject_logits` = [batch, max_n_triple, n_entity].
-    # - `object_logits` = [batch, max_n_triple, n_entity].
-    # - `predicate_logits` = [batch, max_n_triple, n_predicate].
+    # Create the graph to run max-path-sum.
+    # - `subject_to_proposal` = [batch, max_n_triple, max_n_proposal].
+    # - `proposal_to_object` = [batch, max_n_triple, max_n_proposal].
+    # - `proposal_to_proposal` = [batch, max_n_triple, max_n_proposal**2].
 
-    subject_logits = tf.gather_nd(logits_entity_given_entity, subject_index)
-    object_logits = tf.gather_nd(logits_entity_given_entity, object_index)
-    predicate_logits = tf.gather_nd(logits_predicate_given_predicate,
-                                    object_index)
+    subject_to_proposal = tf.gather_nd(
+        tf.transpose(logits_entity_given_proposal, [0, 2, 1]), subject_index)
+    proposal_to_object = tf.gather_nd(
+        tf.transpose(logits_entity_given_proposal, [0, 2, 1]), object_index)
 
-    # Get the pseudo boxes, seek the DP-solution in the graph.
-    # - `attn_proposal_given_entity` = [batch, max_n_proposal, n_entity].
-    # - `attn_relation_given_predicate` = [batch, max_n_proposal**2, n_predicate].
-    # - `ps_subject_attn` = [batch, max_n_triple, max_n_proposal].
-    # - `ps_object_attn` = [batch, max_n_triple, max_n_proposal].
-    # - `ps_predicate_attn` = [batch, max_n_triple, max_n_proposal**2].
+    logits_predicate_given_relation_reshaped = tf.reshape(
+        logits_predicate_given_relation,
+        [batch, max_n_proposal * max_n_proposal, self.n_predicate])
+    proposal_to_proposal = tf.gather_nd(
+        tf.transpose(logits_predicate_given_relation_reshaped, [0, 2, 1]),
+        predicate_index)
+    proposal_to_proposal = tf.reshape(
+        proposal_to_proposal,
+        [batch, max_n_triple, max_n_proposal, max_n_proposal])
 
-    ps_subject_attn = tf.gather_nd(
-        tf.transpose(attn_proposal_given_entity, [0, 2, 1]), subject_index)
-    ps_object_attn = tf.gather_nd(
-        tf.transpose(attn_proposal_given_entity, [0, 2, 1]), object_index)
-    ps_relation_attn = tf.gather_nd(
-        tf.transpose(attn_relation_given_predicate, [0, 2, 1]), predicate_index)
-    ps_relation_attn = tf.reshape(
-        ps_relation_attn, [batch, max_n_triple, max_n_proposal, max_n_proposal])
-
+    # DP solution of max-path-sum.
     (max_path_sum, ps_subject_proposal_i,
-     ps_object_proposal_j) = utils.compute_max_path_sum(n_proposal, n_triple,
-                                                        ps_subject_attn,
-                                                        ps_relation_attn,
-                                                        ps_object_attn)
+     ps_object_proposal_j) = utils.compute_max_path_sum(
+         n_proposal, n_triple, tf.nn.sigmoid(subject_to_proposal),
+         tf.nn.sigmoid(proposal_to_proposal), tf.nn.sigmoid(proposal_to_object))
 
     ps_subject_box = utils.gather_proposal_by_index(proposals,
                                                     ps_subject_proposal_i)
     ps_object_box = utils.gather_proposal_by_index(proposals,
                                                    ps_object_proposal_j)
 
+    ps_subject_logits = utils.gather_proposal_by_index(
+        logits_entity_given_proposal, ps_subject_proposal_i)
+    ps_object_logits = utils.gather_proposal_by_index(
+        logits_entity_given_proposal, ps_object_proposal_j)
+
+    ps_predicate_logits = utils.gather_relation_by_index(
+        logits_predicate_given_relation, ps_subject_proposal_i,
+        ps_object_proposal_j)
+
     predictions = {
         'midn/subject/ids': subject_ids,
-        'midn/subject/logits': subject_logits,
+        'midn/subject/logits': ps_subject_logits,
         'midn/subject/box': ps_subject_box,
         'midn/object/ids': object_ids,
-        'midn/object/logits': object_logits,
+        'midn/object/logits': ps_object_logits,
         'midn/object/box': ps_object_box,
         'midn/predicate/ids': predicate_ids,
-        'midn/predicate/logits': predicate_logits,
-        'attn_proposal_given_entity': attn_proposal_given_entity,
-        'attn_relation_given_predicate': attn_relation_given_predicate,
+        'midn/predicate/logits': ps_predicate_logits,
     }
 
     return predictions
@@ -438,41 +347,24 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
     object_labels = tf.maximum(0, object_ids - 1)
     predicate_labels = tf.maximum(0, predicate_ids - 1)
 
-    if self.options.sigmoid_cross_entropy:
-      triple_mask = tf.expand_dims(triple_mask, -1)
-      subject_labels = tf.one_hot(subject_labels, self.n_entity)
-      object_labels = tf.one_hot(object_labels, self.n_entity)
-      predicate_labels = tf.one_hot(predicate_labels, self.n_predicate)
+    triple_mask = tf.expand_dims(triple_mask, -1)
+    subject_labels = tf.one_hot(subject_labels, self.n_entity)
+    object_labels = tf.one_hot(object_labels, self.n_entity)
+    predicate_labels = tf.one_hot(predicate_labels, self.n_predicate)
 
-      subject_losses = tf.nn.sigmoid_cross_entropy_with_logits(
-          labels=subject_labels, logits=subject_logits)
-      object_losses = tf.nn.sigmoid_cross_entropy_with_logits(
-          labels=object_labels, logits=object_logits)
-      predicate_losses = tf.nn.sigmoid_cross_entropy_with_logits(
-          labels=predicate_labels, logits=predicate_logits)
+    subject_losses = tf.nn.sigmoid_cross_entropy_with_logits(
+        labels=subject_labels, logits=subject_logits)
+    object_losses = tf.nn.sigmoid_cross_entropy_with_logits(
+        labels=object_labels, logits=object_logits)
+    predicate_losses = tf.nn.sigmoid_cross_entropy_with_logits(
+        labels=predicate_labels, logits=predicate_logits)
 
-      subject_loss = tf.reduce_mean(
-          masked_ops.masked_avg(subject_losses, triple_mask, dim=1))
-      object_loss = tf.reduce_mean(
-          masked_ops.masked_avg(subject_losses, triple_mask, dim=1))
-      predicate_loss = tf.reduce_mean(
-          masked_ops.masked_avg(predicate_losses, triple_mask, dim=1))
-
-    else:
-
-      subject_losses = tf.nn.sparse_softmax_cross_entropy_with_logits(
-          labels=subject_labels, logits=subject_logits)
-      object_losses = tf.nn.sparse_softmax_cross_entropy_with_logits(
-          labels=object_labels, logits=object_logits)
-      predicate_losses = tf.nn.sparse_softmax_cross_entropy_with_logits(
-          labels=predicate_labels, logits=predicate_logits)
-
-      subject_loss = tf.reduce_mean(
-          masked_ops.masked_avg(subject_losses, triple_mask, dim=1))
-      object_loss = tf.reduce_mean(
-          masked_ops.masked_avg(subject_losses, triple_mask, dim=1))
-      predicate_loss = tf.reduce_mean(
-          masked_ops.masked_avg(predicate_losses, triple_mask, dim=1))
+    subject_loss = tf.reduce_mean(
+        masked_ops.masked_avg(subject_losses, triple_mask, dim=1))
+    object_loss = tf.reduce_mean(
+        masked_ops.masked_avg(subject_losses, triple_mask, dim=1))
+    predicate_loss = tf.reduce_mean(
+        masked_ops.masked_avg(predicate_losses, triple_mask, dim=1))
 
     return {
         'metrics/med_subject_loss':

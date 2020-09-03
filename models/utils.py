@@ -107,20 +107,24 @@ def compute_max_path_sum(n_proposal, n_triple, subject_to_proposal,
   return max_path_sum, subject_proposal_index, object_proposal_index
 
 
-def gather_grounded_proposal_box(proposals, proposal_index):
-  """Gathers grounded proposal box.
+def gather_proposal_by_index(proposals, proposal_index):
+  """Gathers proposal box or proposal features by index..
+
+  This is a helper function to extract max-path-sum solution.
 
   Args:
-    proposals: A [batch, max_n_proposal, 4] float tensor.
+    proposals: A [batch, max_n_proposal, dims] float tensor.
+      It could be either proposal box (dims=4) or proposal features.
     proposal_index: A [batch, max_n_triple] int tensor.
 
   Returns:
-    A [batch, max_n_triple, 4] float tensor, the gathered proposals.
+    A [batch, max_n_triple, dims] float tensor, the gathered proposal info,
+      could be proposal boxes or proposal features.
   """
   batch = proposals.shape[0].value
+  dims = proposals.shape[-1].value
   max_n_triple = tf.shape(proposal_index)[1]
   max_n_proposal = tf.shape(proposals)[1]
-  dims = proposals.shape[-1].value
 
   proposals = tf.broadcast_to(tf.expand_dims(proposals, 1),
                               [batch, max_n_triple, max_n_proposal, dims])
@@ -133,8 +137,34 @@ def gather_grounded_proposal_box(proposals, proposal_index):
   return tf.gather_nd(proposals, index)
 
 
-# Identical function, rename it.
-gather_grounded_proposal_embeddings = gather_grounded_proposal_box
+def gather_relation_by_index(relations, subject_index, object_index):
+  """Gathers relation by index.
+
+  This is a helper function to extract max-path-sum solution.
+
+  Args:
+    relations: A [batch, max_n_proposal, max_n_proposal, dims] float tensor.
+    subject_index: A [batch, max_n_triple] int tensor.
+    object_index: A [batch, max_n_triple] int tensor.
+
+  Returns:
+    A [batch, max_n_triple, dims] float tensor, the relation embedding vector.
+  """
+  batch = relations.shape[0].value
+  dims = relations.shape[-1].value
+  max_n_triple = tf.shape(subject_index)[1]
+  max_n_proposal = tf.shape(relations)[1]
+
+  relations = tf.broadcast_to(
+      tf.expand_dims(relations, 1),
+      [batch, max_n_triple, max_n_proposal, max_n_proposal, dims])
+
+  batch_index = tf.broadcast_to(tf.expand_dims(tf.range(batch), 1),
+                                [batch, max_n_triple])
+  triple_index = tf.broadcast_to(tf.expand_dims(tf.range(max_n_triple), 0),
+                                 [batch, max_n_triple])
+  index = tf.stack([batch_index, triple_index, subject_index, object_index], -1)
+  return tf.gather_nd(relations, index)
 
 
 def gather_overlapped_box_indicator_by_iou(n_proposal,
