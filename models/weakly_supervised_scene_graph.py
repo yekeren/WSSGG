@@ -95,6 +95,113 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
     })
     return inputs
 
+  def _semantic_relation_feature(self, n_proposal, proposal_features):
+    """Extracts semantic relation feature for pairs of proposal nodes.
+
+    Args:
+      n_proposal: A [batch] int tensor.
+      proposal_features: A [batch, max_n_proposal, feature_dims] float tensor.
+
+    Returns:
+      A [batch, max_n_proposal, max_n_proposal, feature_dims] float tensor.
+    """
+    batch = proposal_features.shape[0].value
+    max_n_proposal = tf.shape(proposal_features)[1]
+
+    with slim.arg_scope(self.arg_scope_fn()):
+      # Add an additional linear layer to reduce feature dimensions.
+      proposal_hiddens = slim.fully_connected(
+          proposal_features,
+          num_outputs=self.options.hidden_units,
+          activation_fn=tf.nn.leaky_relu,
+          scope="MRD/semantic/hidden")
+      proposal_hiddens = slim.dropout(proposal_hiddens,
+                                      self.options.dropout_keep_prob,
+                                      is_training=self.is_training)
+
+    # Compute relation feature.
+    # - relation_features = [batch, max_n_proposal, max_n_proposal, dims].
+    proposal_broadcast1 = tf.broadcast_to(
+        tf.expand_dims(proposal_hiddens, 1),
+        [batch, max_n_proposal, max_n_proposal, self.options.hidden_units])
+    proposal_broadcast2 = tf.broadcast_to(
+        tf.expand_dims(proposal_hiddens, 2),
+        [batch, max_n_proposal, max_n_proposal, self.options.hidden_units])
+
+    relation_features = tf.concat([
+        proposal_broadcast1 + proposal_broadcast2,
+        proposal_broadcast1 * proposal_broadcast2
+    ], -1)
+
+    with slim.arg_scope(self.arg_scope_fn()):
+      relation_features = slim.fully_connected(
+          relation_features,
+          num_outputs=self.options.hidden_units,
+          activation_fn=None,
+          scope="MRD/semantic/output")
+    return relation_features
+
+  def _spatial_relation_feature(self, n_proposal, proposals):
+    """Extracts semantic relation feature for pairs of proposal nodes.
+
+    Args:
+      n_proposal: A [batch] int tensor.
+      proposals: A [batch, max_n_proposal, 4] float tensor.
+
+    Returns:
+      A [batch, max_n_proposal, max_n_proposal, relation_dims] float tensor.
+    """
+    batch = proposals.shape[0].value
+    max_n_proposal = tf.shape(proposals)[1]
+
+    # Compute single features.
+    centers = box_ops.center(proposals)
+    sizes = box_ops.size(proposals)
+    areas = tf.expand_dims(box_ops.area(proposals), -1)
+
+    unary_features = tf.concat([proposals, centers, sizes, areas], -1)
+    unary_features_broadcast1 = tf.broadcast_to(
+        tf.expand_dims(unary_features, 1),
+        [batch, max_n_proposal, max_n_proposal, unary_features.shape[-1]])
+    unary_features_broadcast2 = tf.broadcast_to(
+        tf.expand_dims(unary_features, 2),
+        [batch, max_n_proposal, max_n_proposal, unary_features.shape[-1]])
+
+    # Compute pairwise features.
+    proposals_broadcast1 = tf.broadcast_to(tf.expand_dims(
+        proposals, 1), [batch, max_n_proposal, max_n_proposal, 4])
+    proposals_broadcast2 = tf.broadcast_to(tf.expand_dims(
+        proposals, 2), [batch, max_n_proposal, max_n_proposal, 4])
+
+    areas_1in2 = tf.expand_dims(
+        box_ops.area_box1_in_box2(proposals_broadcast1, proposals_broadcast2),
+        -1)
+    areas_2in1 = tf.expand_dims(
+        box_ops.area_box1_in_box2(proposals_broadcast2, proposals_broadcast1),
+        -1)
+    iou = tf.expand_dims(
+        box_ops.iou(proposals_broadcast1, proposals_broadcast2), -1)
+
+    relation_features = tf.concat([
+        unary_features_broadcast1, unary_features_broadcast2, areas_1in2,
+        areas_2in1, iou
+    ], -1)
+    with slim.arg_scope(self.arg_scope_fn()):
+      relation_features = slim.fully_connected(
+          relation_features,
+          num_outputs=self.options.hidden_units,
+          activation_fn=tf.nn.leaky_relu,
+          scope="MRD/spatial/hidden")
+      relation_features = slim.dropout(relation_features,
+                                       self.options.dropout_keep_prob,
+                                       is_training=self.is_training)
+      relation_features = slim.fully_connected(
+          relation_features,
+          num_outputs=self.options.hidden_units,
+          activation_fn=None,
+          scope="MRD/spatial/output")
+    return relation_features
+
   def _multiple_relation_detection(self, n_proposal, proposals,
                                    proposal_features):
     """Detects multiple relations given the ground-truth.
@@ -128,43 +235,31 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
                                       maxlen=max_n_proposal,
                                       dtype=tf.float32)
 
-    # Location features TODO.
+    semantic_relation_features = self._semantic_relation_feature(
+        n_proposal, proposal_features)
 
-    with slim.arg_scope(self.arg_scope_fn()):
-      # Add an additional hidden layer to reduce feature dimensions.
-      proposal_hiddens = slim.fully_connected(
-          proposal_features,
-          num_outputs=self.options.hidden_units,
-          activation_fn=tf.nn.leaky_relu,
-          scope="MRD/proposal_hidden")
-      proposal_hiddens = slim.dropout(proposal_hiddens,
-                                      self.options.dropout_keep_prob,
-                                      is_training=self.is_training)
+    spatial_relation_features = self._spatial_relation_feature(
+        n_proposal, proposals)
 
-    # Compute relation feature.
-    # - relation_features = [batch, max_n_proposal, max_n_proposal, dims].
-    proposal_broadcast1 = tf.broadcast_to(
-        tf.expand_dims(proposal_hiddens, 1),
-        [batch, max_n_proposal, max_n_proposal, self.options.hidden_units])
-    proposal_broadcast2 = tf.broadcast_to(
-        tf.expand_dims(proposal_hiddens, 2),
-        [batch, max_n_proposal, max_n_proposal, self.options.hidden_units])
-
-    # relation_features = tf.concat([
-    #     proposal_broadcast1, proposal_broadcast2,
-    #     tf.multiply(proposal_broadcast1, proposal_broadcast2)
-    # ], -1)
-    relation_features = proposal_broadcast1 + proposal_broadcast2
-
-    # Two branches.
+    # Compute the final relation features.
     # - `relation_features` = [batch, max_n_proposal**2, dims].
     # - `relation_masks` = [batch, max_n_proposal**2, 1].
 
-    dims = relation_features.shape[-1].value
-    relation_features = tf.reshape(
-        relation_features, [batch, max_n_proposal * max_n_proposal, dims])
+    relation_features = tf.add(
+        self.options.mrd_semantic_feature_weight * semantic_relation_features,
+        self.options.mrd_spatial_feature_weight * spatial_relation_features)
+
+    relation_features = tf.reshape(relation_features, [
+        batch, max_n_proposal * max_n_proposal,
+        relation_features.shape[-1].value
+    ])
+    relation_masks = tf.multiply(tf.expand_dims(proposal_masks, 1),
+                                 tf.expand_dims(proposal_masks, 2))
+    relation_masks = tf.reshape(relation_masks,
+                                [batch, max_n_proposal * max_n_proposal, 1])
 
     with slim.arg_scope(self.arg_scope_fn()):
+      # Two branches.
       weights_initializer = tf.compat.v1.constant_initializer(
           self.predicate_emb_weights.transpose())
       logits_relation_given_predicate = slim.fully_connected(
@@ -179,11 +274,6 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
           activation_fn=None,
           weights_initializer=weights_initializer,
           scope='MRD/relation_branch2')
-
-    relation_masks = tf.multiply(tf.expand_dims(proposal_masks, 1),
-                                 tf.expand_dims(proposal_masks, 2))
-    relation_masks = tf.reshape(relation_masks,
-                                [batch, max_n_proposal * max_n_proposal, 1])
 
     # Compute MRD results.
     # - `attn_relation_given_predicate` = [batch,  max_n_proposal**2, n_predicate].
@@ -200,7 +290,6 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
         attn_relation_given_predicate,
         tf.nn.softmax(logits_predicate_given_relation))
 
-    #detection_score = attn_relation_given_predicate
     return detection_score, logits_predicate_given_predicate
 
   def _multiple_entity_detection(self, n_proposal, proposal_features):
@@ -233,7 +322,6 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
 
     with slim.arg_scope(self.arg_scope_fn()):
       # Add an additional hidden layer with leaky relu activation.
-      # - Note: the complexity is only applied to localization branch.
       proposal_hiddens = slim.fully_connected(
           proposal_features,
           num_outputs=self.options.hidden_units,
@@ -271,7 +359,6 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
 
     detection_score = tf.multiply(attn_proposal_given_entity,
                                   tf.nn.softmax(logits_entity_given_proposal))
-    #detection_score = tf.nn.softmax(logits_entity_given_proposal)
     return detection_score, logits_entity_given_entity
 
   def predict(self, inputs, **kwargs):
@@ -318,18 +405,18 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
                                       dtype=tf.float32)
 
     # Multiple Entity Detection (MED).
-    # - `attn_proposal_given_entity denotes the importance of region given the existence
-    #    of the ground-truth entity `e`.
+    # - `score_proposal_given_entity` denotes the importance of region given
+    #    the existence of the ground-truth entity `e`.
     #     * shape=[batch, max_n_proposal, n_entity].
     # - `logits_entity_given_entity` is the prediction of entity given
     #    the ground-truth entity, with the internal attention adjusted.
     #     * shape=[batch, n_entity, n_entity]
-    (attn_proposal_given_entity,
+    (score_proposal_given_entity,
      logits_entity_given_entity) = self._multiple_entity_detection(
          n_proposal, proposal_features)
 
     # # Multiple Relation detection network.
-    (attn_relation_given_predicate,
+    (score_relation_given_predicate,
      logits_predicate_given_predicate) = self._multiple_relation_detection(
          n_proposal, proposals, proposal_features)
 
@@ -367,26 +454,28 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
                                     object_index)
 
     # Get the pseudo boxes, seek the DP-solution in the graph.
-    # - `attn_proposal_given_entity` = [batch, max_n_proposal, n_entity].
-    # - `attn_relation_given_predicate` = [batch, max_n_proposal**2, n_predicate].
-    # - `ps_subject_attn` = [batch, max_n_triple, max_n_proposal].
-    # - `ps_object_attn` = [batch, max_n_triple, max_n_proposal].
-    # - `ps_predicate_attn` = [batch, max_n_triple, max_n_proposal**2].
+    # - `score_proposal_given_entity` = [batch, max_n_proposal, n_entity].
+    # - `score_relation_given_predicate` = [batch, max_n_proposal**2, n_predicate].
+    # - `subject_to_proposal` = [batch, max_n_triple, max_n_proposal].
+    # - `proposal_to_object` = [batch, max_n_triple, max_n_proposal].
+    # - `proposal_to_proposal` = [batch, max_n_triple, max_n_proposal**2].
 
-    ps_subject_attn = tf.gather_nd(
-        tf.transpose(attn_proposal_given_entity, [0, 2, 1]), subject_index)
-    ps_object_attn = tf.gather_nd(
-        tf.transpose(attn_proposal_given_entity, [0, 2, 1]), object_index)
-    ps_relation_attn = tf.gather_nd(
-        tf.transpose(attn_relation_given_predicate, [0, 2, 1]), predicate_index)
-    ps_relation_attn = tf.reshape(
-        ps_relation_attn, [batch, max_n_triple, max_n_proposal, max_n_proposal])
+    subject_to_proposal = tf.gather_nd(
+        tf.transpose(score_proposal_given_entity, [0, 2, 1]), subject_index)
+    proposal_to_object = tf.gather_nd(
+        tf.transpose(score_proposal_given_entity, [0, 2, 1]), object_index)
+    proposal_to_proposal = tf.gather_nd(
+        tf.transpose(score_relation_given_predicate, [0, 2, 1]),
+        predicate_index)
+    proposal_to_proposal = tf.reshape(
+        proposal_to_proposal,
+        [batch, max_n_triple, max_n_proposal, max_n_proposal])
 
     (max_path_sum, ps_subject_proposal_i,
      ps_object_proposal_j) = utils.compute_max_path_sum(n_proposal, n_triple,
-                                                        ps_subject_attn,
-                                                        ps_relation_attn,
-                                                        ps_object_attn)
+                                                        subject_to_proposal,
+                                                        proposal_to_proposal,
+                                                        proposal_to_object)
 
     ps_subject_box = utils.gather_proposal_by_index(proposals,
                                                     ps_subject_proposal_i)
@@ -394,16 +483,14 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
                                                    ps_object_proposal_j)
 
     predictions = {
-        'midn/subject/ids': subject_ids,
-        'midn/subject/logits': subject_logits,
-        'midn/subject/box': ps_subject_box,
-        'midn/object/ids': object_ids,
-        'midn/object/logits': object_logits,
-        'midn/object/box': ps_object_box,
-        'midn/predicate/ids': predicate_ids,
-        'midn/predicate/logits': predicate_logits,
-        'attn_proposal_given_entity': attn_proposal_given_entity,
-        'attn_relation_given_predicate': attn_relation_given_predicate,
+        'pseudo/subject/ids': subject_ids,
+        'pseudo/subject/logits': subject_logits,
+        'pseudo/subject/box': ps_subject_box,
+        'pseudo/object/ids': object_ids,
+        'pseudo/object/logits': object_logits,
+        'pseudo/object/box': ps_object_box,
+        'pseudo/predicate/ids': predicate_ids,
+        'pseudo/predicate/logits': predicate_logits,
     }
 
     return predictions
@@ -418,13 +505,13 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
     Returns:
       loss_dict: A dictionary of loss tensors keyed by names.
     """
-    subject_ids = predictions['midn/subject/ids']
-    object_ids = predictions['midn/object/ids']
-    predicate_ids = predictions['midn/predicate/ids']
+    subject_ids = predictions['pseudo/subject/ids']
+    object_ids = predictions['pseudo/object/ids']
+    predicate_ids = predictions['pseudo/predicate/ids']
 
-    subject_logits = predictions['midn/subject/logits']
-    object_logits = predictions['midn/object/logits']
-    predicate_logits = predictions['midn/predicate/logits']
+    subject_logits = predictions['pseudo/subject/logits']
+    object_logits = predictions['pseudo/object/logits']
+    predicate_logits = predictions['pseudo/predicate/logits']
 
     n_triple = inputs['scene_graph/n_triple']
 
@@ -474,6 +561,24 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
       predicate_loss = tf.reduce_mean(
           masked_ops.masked_avg(predicate_losses, triple_mask, dim=1))
 
+    # subject_losses = tf.nn.sparse_softmax_cross_entropy_with_logits(
+    #     labels=subject_labels, logits=subject_logits)
+    # object_losses = tf.nn.sparse_softmax_cross_entropy_with_logits(
+    #     labels=object_labels, logits=object_logits)
+
+    # subject_loss = tf.reduce_mean(
+    #     masked_ops.masked_avg(subject_losses, triple_mask, dim=1))
+    # object_loss = tf.reduce_mean(
+    #     masked_ops.masked_avg(subject_losses, triple_mask, dim=1))
+
+    # # Predicate.
+    # triple_mask = tf.expand_dims(triple_mask, -1)
+    # predicate_labels = tf.one_hot(predicate_labels, self.n_predicate)
+    # predicate_losses = tf.nn.sigmoid_cross_entropy_with_logits(
+    #     labels=predicate_labels, logits=predicate_logits)
+    # predicate_loss = tf.reduce_mean(
+    #     masked_ops.masked_avg(predicate_losses, triple_mask, dim=1))
+
     return {
         'metrics/med_subject_loss':
             self.options.med_loss_weight * subject_loss,
@@ -498,8 +603,8 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
     gt_subject_box = inputs['scene_graph/subject/box']
     gt_object_box = inputs['scene_graph/object/box']
 
-    ps_subject_box = predictions['midn/subject/box']
-    ps_object_box = predictions['midn/object/box']
+    ps_subject_box = predictions['pseudo/subject/box']
+    ps_object_box = predictions['pseudo/object/box']
 
     n_triple = inputs['scene_graph/n_triple']
 
@@ -513,7 +618,7 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
     object_iou = box_ops.iou(gt_object_box, ps_object_box)
 
     _mean_fn = lambda x: tf.reduce_mean(
-        masked_ops.masked_avg(x, mask=triple_mask, dim=1))
+        masked_ops.masked_avg(tf.cast(x, tf.float32), mask=triple_mask, dim=1))
 
     mean_subject_iou = tf.keras.metrics.Mean()
     mean_object_iou = tf.keras.metrics.Mean()
@@ -521,7 +626,31 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
     mean_subject_iou.update_state(_mean_fn(subject_iou))
     mean_object_iou.update_state(_mean_fn(object_iou))
 
-    return {
-        'metrics/iou_subject': mean_subject_iou,
-        'metrics/iou_object': mean_object_iou,
+    metric_dict = {
+        'metrics/pseudo/subject_iou': mean_subject_iou,
+        'metrics/pseudo/object_iou': mean_object_iou,
     }
+    # Compute accuracy at different IoU level.
+    for iou_threshold in [0.25, 0.5, 0.75]:
+      correct_subject = tf.greater_equal(subject_iou, iou_threshold)
+      correct_object = tf.greater_equal(object_iou, iou_threshold)
+      correct_relation = tf.logical_and(correct_subject, correct_object)
+
+      mean_subject_recall = tf.keras.metrics.Mean()
+      mean_object_recall = tf.keras.metrics.Mean()
+      mean_relation_recall = tf.keras.metrics.Mean()
+
+      mean_subject_recall.update_state(_mean_fn(correct_subject))
+      mean_object_recall.update_state(_mean_fn(correct_object))
+      mean_relation_recall.update_state(_mean_fn(correct_relation))
+
+      metric_dict.update({
+          'metrics/pseudo/subject_recall@%.2lf' % (iou_threshold):
+              mean_subject_recall,
+          'metrics/pseudo/object_recall@%.2lf' % (iou_threshold):
+              mean_object_recall,
+          'metrics/pseudo/relation_recall@%.2lf' % (iou_threshold):
+              mean_relation_recall,
+      })
+
+    return metric_dict
