@@ -109,7 +109,7 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
     max_n_proposal = tf.shape(proposal_features)[1]
 
     with slim.arg_scope(self.arg_scope_fn()):
-      # Add an additional layer to reduce feature dimensions.
+      # Add an additional linear layer to reduce feature dimensions.
       proposal_hiddens = slim.fully_connected(
           proposal_features,
           num_outputs=self.options.hidden_units,
@@ -132,6 +132,13 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
         proposal_broadcast1 + proposal_broadcast2,
         proposal_broadcast1 * proposal_broadcast2
     ], -1)
+
+    with slim.arg_scope(self.arg_scope_fn()):
+      relation_features = slim.fully_connected(
+          relation_features,
+          num_outputs=self.options.hidden_units,
+          activation_fn=None,
+          scope="MRD/semantic/output")
     return relation_features
 
   def _spatial_relation_feature(self, n_proposal, proposals):
@@ -188,6 +195,11 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
       relation_features = slim.dropout(relation_features,
                                        self.options.dropout_keep_prob,
                                        is_training=self.is_training)
+      relation_features = slim.fully_connected(
+          relation_features,
+          num_outputs=self.options.hidden_units,
+          activation_fn=None,
+          scope="MRD/spatial/output")
     return relation_features
 
   def _multiple_relation_detection(self, n_proposal, proposals,
@@ -212,7 +224,7 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
       proposal_features: A [batch, max_n_proposal, feature_dims] float tensor.
 
     Returns:
-      attn_relation_given_predicate: Attention distribution of relations given
+      score_relation_given_predicate: Attention distribution of relations given
         the predicate. shape=[batch, max_n_proposal**2, n_predicate].
       logits_predicate_given_predicate: Predicate prediction.
         shape=[batch, n_predicate, n_predicate].
@@ -223,52 +235,47 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
                                       maxlen=max_n_proposal,
                                       dtype=tf.float32)
 
-    # Compute `semantic_relation_features` and `spatial_relation_features`.
-    # - `semantic_relation_features`=[batch, max_n_proposal**2, semantic_dims].
-    # - `spatial_relation_features`=[batch, max_n_proposal**2, spatial_dims].
     semantic_relation_features = self._semantic_relation_feature(
         n_proposal, proposal_features)
+
     spatial_relation_features = self._spatial_relation_feature(
         n_proposal, proposals)
 
-    semantic_relation_features = tf.reshape(semantic_relation_features, [
-        batch, max_n_proposal * max_n_proposal,
-        semantic_relation_features.shape[-1].value
-    ])
-    spatial_relation_features = tf.reshape(spatial_relation_features, [
-        batch, max_n_proposal * max_n_proposal,
-        spatial_relation_features.shape[-1].value
-    ])
-
+    # Compute the final relation features.
     # - `relation_features` = [batch, max_n_proposal**2, dims].
     # - `relation_masks` = [batch, max_n_proposal**2, 1].
 
-    # Two-branch MRD approach and late fusion (i.e., fusing the logits).
+    relation_features = tf.add(
+        self.options.mrd_semantic_feature_weight * semantic_relation_features,
+        self.options.mrd_spatial_feature_weight * spatial_relation_features)
+
+    relation_features = tf.reshape(relation_features, [
+        batch, max_n_proposal * max_n_proposal,
+        relation_features.shape[-1].value
+    ])
     relation_masks = tf.multiply(tf.expand_dims(proposal_masks, 1),
                                  tf.expand_dims(proposal_masks, 2))
     relation_masks = tf.reshape(relation_masks,
                                 [batch, max_n_proposal * max_n_proposal, 1])
 
-    logits_relation_given_predicate = []
-    logits_predicate_given_relation = []
-
-    for (scope,
-         relation_features) in [('MRD/semantic', semantic_relation_features),
-                                ('MRD/spatial', spatial_relation_features)]:
-      with slim.arg_scope(self.arg_scope_fn()):
-        logits_relation_given_predicate.append(
-            slim.fully_connected(relation_features,
-                                 num_outputs=self.n_predicate,
-                                 activation_fn=None,
-                                 scope='{}/branch1'.format(scope)))
-        logits_predicate_given_relation.append(
-            slim.fully_connected(relation_features,
-                                 num_outputs=self.n_predicate,
-                                 activation_fn=None,
-                                 scope='{}/branch2'.format(scope)))
-
-    logits_relation_given_predicate = tf.add_n(logits_relation_given_predicate)
-    logits_predicate_given_relation = tf.add_n(logits_predicate_given_relation)
+    with slim.arg_scope(self.arg_scope_fn()):
+      # Two branches.
+      weights_initializer = tf.compat.v1.constant_initializer(
+          self.predicate_emb_weights.transpose())
+      logits_relation_given_predicate = slim.fully_connected(
+          relation_features,
+          num_outputs=self.n_predicate,
+          activation_fn=None,
+          weights_initializer=weights_initializer,
+          biases_initializer=None,
+          scope='MRD/relation_branch1')
+      logits_predicate_given_relation = slim.fully_connected(
+          relation_features,
+          num_outputs=self.n_predicate,
+          activation_fn=None,
+          weights_initializer=weights_initializer,
+          biases_initializer=None,
+          scope='MRD/relation_branch2')
 
     # Compute MRD results.
     # - `attn_relation_given_predicate` = [batch,  max_n_proposal**2, n_predicate].
@@ -305,7 +312,7 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
       proposal_features: A [batch, max_n_proposal, feature_dims] float tensor.
 
     Returns:
-      attn_proposal_given_entity: Attention distribution of proposals given the
+      score_proposal_given_entity: Attention distribution of proposals given the
         entities. shape=[batch, max_n_proposal, n_entity]
       logits_entity_given_entity: Entity prediction.
         shape=[batch, n_entity, n_entity]
@@ -327,15 +334,21 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
                                       is_training=self.is_training)
 
       # Two branches.
+      weights_initializer = tf.compat.v1.constant_initializer(
+          self.entity_emb_weights.transpose())
       logits_proposal_given_entity = slim.fully_connected(
           proposal_hiddens,
           num_outputs=self.n_entity,
           activation_fn=None,
+          weights_initializer=weights_initializer,
+          biases_initializer=None,
           scope="MED/proposal_branch1")
       logits_entity_given_proposal = slim.fully_connected(
           proposal_hiddens,
           num_outputs=self.n_entity,
           activation_fn=None,
+          weights_initializer=weights_initializer,
+          biases_initializer=None,
           scope="MED/proposal_branch2")
 
     attn_proposal_given_entity = masked_ops.masked_softmax(
@@ -414,8 +427,6 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
     (score_relation_given_predicate,
      logits_predicate_given_predicate) = self._multiple_relation_detection(
          n_proposal, proposals, proposal_features)
-
-    # Teacher-student learning.
 
     # Parse the image-level scene-graph.
     n_triple = inputs['scene_graph/n_triple']
