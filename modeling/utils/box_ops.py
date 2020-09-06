@@ -36,6 +36,35 @@ def flip_left_right(box):
   return tf.stack([ymin, 1.0 - xmax, ymax, 1.0 - xmin], axis=-1)
 
 
+def center(box):
+  """Computes the box center.
+  Args:
+    box: A [i1,...,iN,  4] float tensor.
+
+  Returns:
+    center: Box centers, a [i1,...,iN, 2] tensor denoting [ycenter, xcenter].
+  """
+  ymin, xmin, ymax, xmax = tf.unstack(box, axis=-1)
+  ycenter = (ymin + ymax) / 2
+  xcenter = (xmin + xmax) / 2
+  return tf.stack([ycenter, xcenter], axis=-1)
+
+
+def size(box):
+  """Computes the box size.
+
+  Args:
+    box: A [i1,...,iN,  4] float tensor.
+
+  Returns:
+    size: Box sizes, a [i1,...,iN, 2] tensor denoting [height, width].
+  """
+  ymin, xmin, ymax, xmax = tf.unstack(box, axis=-1)
+  height = ymax - ymin
+  width = xmax - xmin
+  return tf.stack([height, width], axis=-1)
+
+
 def area(box):
   """Computes the box area.
 
@@ -83,3 +112,17 @@ def iou(box1, box2):
   area_intersect = area(intersect(box1, box2))
   area_union = area(box1) + area(box2) - area_intersect
   return tf.math.divide(area_intersect, tf.maximum(area_union, _EPSILON))
+
+
+def area_box1_in_box2(box1, box2):
+  """Computes the area(intersect(box1, box2))/ area(box2). 
+
+  Args:
+    box1: A [i1,...,iN, 4] float tensor.
+    box2: A [i1,...,iN, 4] float tensor.
+
+  Returns:
+    iou: A [i1,...,iN] float tensor.
+  """
+  area_intersect = area(intersect(box1, box2))
+  return tf.math.divide(area_intersect, tf.maximum(area(box2), _EPSILON))

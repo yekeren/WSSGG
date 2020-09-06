@@ -77,13 +77,13 @@ def _parse_single_example(example, options):
           parsed['id'],
       # Proposals.
       'image/n_proposal':
-          parsed['image/n_proposal'],
+          tf.minimum(parsed['image/n_proposal'], options.max_n_proposal),
       'image/proposal':
-          proposals,
+          proposals[:options.max_n_proposal, :],
       'image/proposal/feature':
           tf.reshape(
               tf.sparse_tensor_to_dense(parsed['image/proposal/feature']),
-              [-1, options.feature_dimensions]),
+              [-1, options.feature_dimensions])[:options.max_n_proposal, :],
       # Scene graph.
       'scene_graph/n_triple':
           parsed['scene_graph/n_triple'],
@@ -120,26 +120,16 @@ def _create_dataset(options, is_training, input_pipeline_context=None):
   Returns:
     A tf.data.Dataset object.
   """
+  batch_size = options.batch_size
   dataset = tf.data.Dataset.list_files(options.input_pattern[:],
                                        shuffle=is_training)
-
-  batch_size = options.batch_size
-  if input_pipeline_context:
-    if input_pipeline_context.num_input_pipelines > 1:
-      dataset = dataset.shard(input_pipeline_context.num_input_pipelines,
-                              input_pipeline_context.input_pipeline_id)
-      logging.info('Input pipeline %i/%i.',
-                   input_pipeline_context.input_pipeline_id,
-                   input_pipeline_context.num_input_pipelines)
-    batch_size = input_pipeline_context.get_per_replica_batch_size(
-        options.batch_size)
-
   dataset = dataset.interleave(tf.data.TFRecordDataset,
                                cycle_length=options.interleave_cycle_length)
 
   parse_fn = lambda x: _parse_single_example(x, options)
   dataset = dataset.map(map_func=parse_fn,
                         num_parallel_calls=options.num_parallel_calls)
+  dataset = dataset.cache()
 
   if is_training:
     dataset = dataset.repeat()

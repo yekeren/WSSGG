@@ -255,12 +255,38 @@ def train(pipeline_proto, model_dir, use_mirrored_strategy=False):
       keep_checkpoint_max=train_config.keep_checkpoint_max,
       log_step_count_steps=train_config.log_step_count_steps)
 
-  # Train and evaluate.
+  # Train.
   model_fn = _create_model_fn(pipeline_proto, is_chief=run_config.is_chief)
   estimator = tf.estimator.Estimator(model_fn=model_fn,
                                      model_dir=model_dir,
                                      config=run_config)
   estimator.train(train_input_fn, max_steps=train_config.max_steps)
+
+
+def evaluate(pipeline_proto, model_dir):
+  """Starts a evaluation.
+
+  Args:
+    pipeline_proto: An instance of pipeline_pb2.Pipeline.
+    model_dir: Path to the directory saving checkpoint files.
+  """
+  if not isinstance(pipeline_proto, pipeline_pb2.Pipeline):
+    raise ValueError('pipeline_proto has to be an instance of Pipeline.')
+
+  # Create train_spec.
+  eval_config = pipeline_proto.eval_config
+  eval_input_fn = reader.get_input_fn(pipeline_proto.eval_reader,
+                                      is_training=False)
+
+  run_config = tf.estimator.RunConfig(session_config=tf.ConfigProto(
+      allow_soft_placement=True, gpu_options=tf.GPUOptions(allow_growth=True)))
+
+  # Evaluate.
+  model_fn = _create_model_fn(pipeline_proto, is_chief=run_config.is_chief)
+  estimator = tf.estimator.Estimator(model_fn=model_fn,
+                                     model_dir=model_dir,
+                                     config=run_config)
+  estimator.evaluate(eval_input_fn)
 
 
 def predict(pipeline_proto,
@@ -285,7 +311,6 @@ def predict(pipeline_proto,
                                          is_training=False)
 
   # Create estimator.
-
   model_fn = _create_model_fn(pipeline_proto)
 
   run_config = tf.estimator.RunConfig(session_config=tf.compat.v1.ConfigProto(
@@ -297,10 +322,24 @@ def predict(pipeline_proto,
                                      params=params)
 
   # Predict results.
-
   checkpoint_path = tf.train.latest_checkpoint(model_dir)
   assert checkpoint_path is not None
   for example in estimator.predict(input_fn=predict_input_fn,
                                    checkpoint_path=checkpoint_path,
                                    yield_single_examples=yield_single_examples):
     yield example
+
+
+def debug(pipeline_proto, model_dir):
+  """Debugs to check inference results.
+
+  Args:
+    pipeline_proto: A pipeline_pb2.Pipeline proto.
+    model_dir: Path to the directory saving model checkpoints.
+  """
+  for example_id, example in enumerate(predict(pipeline_proto, model_dir)):
+    for key in sorted(example.keys()):
+      print('%s, shape=%s' % (key, example[key].shape))
+    import pdb
+    pdb.set_trace()
+    j = 1

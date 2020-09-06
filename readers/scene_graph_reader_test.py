@@ -33,11 +33,12 @@ class SceneGraphReaderTest(tf.test.TestCase):
     batch_size = 17
     options_str = r"""
       scene_graph_reader {
-        input_pattern: "data-vspnet/tfrecords/stanford/train.tfrecord"
+        input_pattern: "data-vspnet/tfrecords/hanwang300/val.tfrecord-00000-of-00001"
         batch_size: %i
         shuffle_buffer_size: 500
         prefetch_buffer_size: 500
         feature_dimensions: 1536
+        max_n_proposals: 29
       }
     """ % (batch_size)
     options = text_format.Merge(options_str, reader_pb2.Reader())
@@ -46,9 +47,9 @@ class SceneGraphReaderTest(tf.test.TestCase):
     for elem in dataset.take(1):
       self.assertAllEqual(elem['id'].shape, [batch_size])
       self.assertAllEqual(elem['image/n_proposal'].shape, [batch_size])
-      self.assertAllEqual(elem['image/proposal'].shape, [batch_size, 20, 4])
+      self.assertAllEqual(elem['image/proposal'].shape, [batch_size, 29, 4])
       self.assertAllEqual(elem['image/proposal/feature'].shape,
-                          [batch_size, 20, 1536])
+                          [batch_size, 29, 1536])
       max_n_triple = elem['scene_graph/n_triple'].numpy().max()
       self.assertAllEqual(elem['scene_graph/predicate'].shape,
                           [batch_size, max_n_triple])

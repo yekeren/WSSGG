@@ -137,6 +137,31 @@ def gather_proposal_by_index(proposals, proposal_index):
   return tf.gather_nd(proposals, index)
 
 
+def gather_proposal_score_by_index(entity_to_proposal, proposal_index):
+  """Gathers graph edge weight from entity node to proposal node.
+
+  This is a helper function to extract max-path-sum solution.
+
+  Args:
+    entity_to_proposal: A [batch, max_n_triple, max_n_proposal] float tensor.
+      It could be either `subject_to_proposal` or `proposal_to_object`.
+    proposal_index: A [batch, max_n_triple] int tensor.
+
+  Returns:
+    A [batch, max_n_triple] float tensor, denoting the weight.
+  """
+  batch = entity_to_proposal.shape[0].value
+  max_n_triple = tf.shape(entity_to_proposal)[1]
+  max_n_proposal = tf.shape(entity_to_proposal)[2]
+
+  batch_index = tf.broadcast_to(tf.expand_dims(tf.range(batch), 1),
+                                [batch, max_n_triple])
+  triple_index = tf.broadcast_to(tf.expand_dims(tf.range(max_n_triple), 0),
+                                 [batch, max_n_triple])
+  index = tf.stack([batch_index, triple_index, proposal_index], -1)
+  return tf.gather_nd(entity_to_proposal, index)
+
+
 def gather_relation_by_index(relations, subject_index, object_index):
   """Gathers relation by index.
 
@@ -165,6 +190,33 @@ def gather_relation_by_index(relations, subject_index, object_index):
                                  [batch, max_n_triple])
   index = tf.stack([batch_index, triple_index, subject_index, object_index], -1)
   return tf.gather_nd(relations, index)
+
+
+def gather_relation_score_by_index(proposal_to_proposal, subject_index,
+                                   object_index):
+  """Gathers graph edge weight from subject proposal to object proposal.
+
+  This is a helper function to extract max-path-sum solution.
+
+  Args: 
+    proposal_to_proposal: A [batch, max_n_triple, max_n_proposal, 
+      max_n_proposal] float tensor.
+    subject_index: A [batch, max_n_triple] int tensor.
+    object_index: A [batch, max_n_triple] int tensor.
+
+  Returns:
+    A [batch, max_n_triple] float tensor, denoting the weight.
+  """
+  batch = proposal_to_proposal.shape[0].value
+  max_n_triple = tf.shape(proposal_to_proposal)[1]
+  max_n_proposal = tf.shape(proposal_to_proposal)[2]
+
+  batch_index = tf.broadcast_to(tf.expand_dims(tf.range(batch), 1),
+                                [batch, max_n_triple])
+  triple_index = tf.broadcast_to(tf.expand_dims(tf.range(max_n_triple), 0),
+                                 [batch, max_n_triple])
+  index = tf.stack([batch_index, triple_index, subject_index, object_index], -1)
+  return tf.gather_nd(proposal_to_proposal, index)
 
 
 def gather_overlapped_box_indicator_by_iou(n_proposal,
@@ -207,45 +259,6 @@ def gather_overlapped_box_indicator_by_iou(n_proposal,
   roughly_overlapped = tf.logical_and(tf.math.greater(iou, 0.0),
                                       tf.math.less(iou, threshold))
   return highly_overlapped, roughly_overlapped
-
-
-def compute_nms_l2_distillation_loss(entity_embs, proposal_embs,
-                                     proposal_indicator):
-  """Computes non-max-suppresion l2 distillation loss.
-
-  Args:
-    entity_embs: Subject or object embeddings of shape [batch, max_n_triple, dims].
-    proposal_embs: A [batch, max_n_proposal, dims] float tensor.
-    proposal_indicator: A boolean tensor denoting the matching relation, 
-      shape=[batch, max_n_triple, max_n_proposal], should be the returned
-      `highly_overlapped` of `gather_overlapped_box_indicator_by_iou`.
-
-  Returns:
-    A scalar tensor denoting the loss.
-  """
-  (batch, dims) = (entity_embs.shape[0].value, entity_embs.shape[-1].value)
-  max_n_triple = tf.shape(entity_embs)[1]
-  max_n_proposal = tf.shape(proposal_embs)[1]
-
-  # Broadcast shape.
-  (entity_embs, proposal_embs) = (tf.expand_dims(entity_embs, 2),
-                                  tf.expand_dims(proposal_embs, 1))
-  entity_embs = tf.broadcast_to(entity_embs,
-                                [batch, max_n_triple, max_n_proposal, dims])
-  proposal_embs = tf.broadcast_to(proposal_embs,
-                                  [batch, max_n_triple, max_n_proposal, dims])
-
-  proposal_indicator = tf.expand_dims(proposal_indicator, -1)
-  proposal_indicator = tf.broadcast_to(
-      proposal_indicator, [batch, max_n_triple, max_n_proposal, dims])
-  proposal_indicator = tf.cast(proposal_indicator, tf.float32)
-
-  # L2 distance.
-  l2_sum = tf.reduce_sum(
-      tf.square(entity_embs - proposal_embs) * proposal_indicator)
-  l2_avg = tf.math.divide(l2_sum,
-                          tf.maximum(1e-10, tf.reduce_sum(proposal_indicator)))
-  return l2_avg
 
 
 def sample_one_based_ids_not_equal(ids, max_id=100):
