@@ -114,15 +114,65 @@ def iou(box1, box2):
   return tf.math.divide(area_intersect, tf.maximum(area_union, _EPSILON))
 
 
-def area_box1_in_box2(box1, box2):
-  """Computes the area(intersect(box1, box2))/ area(box2). 
-
+def x_intersect_len(box1, box2):
+  """Computes the length of the x intersect.
   Args:
     box1: A [i1,...,iN, 4] float tensor.
     box2: A [i1,...,iN, 4] float tensor.
 
   Returns:
-    iou: A [i1,...,iN] float tensor.
+    A [i1,...,iN] float tensor.
   """
-  area_intersect = area(intersect(box1, box2))
-  return tf.math.divide(area_intersect, tf.maximum(area(box2), _EPSILON))
+  ymin1, xmin1, ymax1, xmax1 = tf.unstack(box1, axis=-1)
+  ymin2, xmin2, ymax2, xmax2 = tf.unstack(box2, axis=-1)
+
+  xmin = tf.maximum(xmin1, xmin2)
+  xmax = tf.minimum(xmax1, xmax2)
+
+  return tf.maximum(xmax - xmin, 0.0)
+
+
+def y_intersect_len(box1, box2):
+  """Computes the length of the y intersect.
+  Args:
+    box1: A [i1,...,iN, 4] float tensor.
+    box2: A [i1,...,iN, 4] float tensor.
+
+  Returns:
+    A [i1,...,iN] float tensor.
+  """
+  ymin1, xmin1, ymax1, xmax1 = tf.unstack(box1, axis=-1)
+  ymin2, xmin2, ymax2, xmax2 = tf.unstack(box2, axis=-1)
+
+  ymin = tf.maximum(ymin1, ymin2)
+  ymax = tf.minimum(ymax1, ymax2)
+
+  return tf.maximum(ymax - ymin, 0.0)
+
+
+def x_distance(box1, box2):
+  """Computes the x-distance between the two centers.
+  Args:
+    box1: A [i1,...,iN, 4] float tensor.
+    box2: A [i1,...,iN, 4] float tensor.
+
+  Returns:
+    distance: A [i1,...,iN] float tensor.
+  """
+  x1 = tf.unstack(center(box1), axis=-1)[1]
+  x2 = tf.unstack(center(box2), axis=-1)[1]
+  return x1 - x2
+
+
+def y_distance(box1, box2):
+  """Computes the y-distance between the two centers.
+  Args:
+    box1: A [i1,...,iN, 4] float tensor.
+    box2: A [i1,...,iN, 4] float tensor.
+
+  Returns:
+    distance: A [i1,...,iN] float tensor.
+  """
+  y1 = tf.unstack(center(box1), axis=-1)[0]
+  y2 = tf.unstack(center(box2), axis=-1)[0]
+  return y1 - y2
