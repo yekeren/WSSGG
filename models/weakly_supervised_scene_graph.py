@@ -93,18 +93,24 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
     proposal_broadcast1 = tf.broadcast_to(tf.expand_dims(
         proposal_features, 1), [
             batch, max_n_proposal, max_n_proposal,
-            self.options.relation_hidden_units
+            proposal_features.shape[-1].value
         ])
     proposal_broadcast2 = tf.broadcast_to(tf.expand_dims(
         proposal_features, 2), [
             batch, max_n_proposal, max_n_proposal,
-            self.options.relation_hidden_units
+            proposal_features.shape[-1].value
         ])
 
     relation_features = tf.concat([
         proposal_broadcast1,
         proposal_broadcast2,
     ], -1)
+    with slim.arg_scope(self.arg_scope_fn()):
+      relation_features = slim.fully_connected(
+          relation_features,
+          num_outputs=self.options.relation_hidden_units,
+          activation_fn=tf.nn.leaky_relu,
+          scope='relation/semantic/hidden')
     return relation_features
 
   def _spatial_relation_feature(self, n_proposal, proposals):
@@ -139,19 +145,40 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
     proposals_broadcast2 = tf.broadcast_to(tf.expand_dims(
         proposals, 2), [batch, max_n_proposal, max_n_proposal, 4])
 
-    areas_1in2 = tf.expand_dims(
-        box_ops.area_box1_in_box2(proposals_broadcast1, proposals_broadcast2),
-        -1)
-    areas_2in1 = tf.expand_dims(
-        box_ops.area_box1_in_box2(proposals_broadcast2, proposals_broadcast1),
-        -1)
-    iou = tf.expand_dims(
-        box_ops.iou(proposals_broadcast1, proposals_broadcast2), -1)
+    height1, width1 = tf.unstack(box_ops.size(proposals_broadcast1), axis=-1)
+    height2, width2 = tf.unstack(box_ops.size(proposals_broadcast2), axis=-1)
+    area1 = box_ops.area(proposals_broadcast1)
+    area2 = box_ops.area(proposals_broadcast2)
+
+    x_distance = box_ops.x_distance(proposals_broadcast1, proposals_broadcast2)
+    y_distance = box_ops.y_distance(proposals_broadcast1, proposals_broadcast2)
+    x_intersect = box_ops.x_intersect_len(proposals_broadcast1,
+                                          proposals_broadcast2)
+    y_intersect = box_ops.y_intersect_len(proposals_broadcast1,
+                                          proposals_broadcast2)
+    intersect_area = box_ops.area(
+        box_ops.intersect(proposals_broadcast1, proposals_broadcast2))
+    iou = box_ops.iou(proposals_broadcast1, proposals_broadcast2)
+
+    pairwise_features_list = [
+        x_distance, y_distance, x_distance / width1, x_distance / width2,
+        y_distance / height1, y_distance / height2, x_intersect, y_intersect,
+        x_intersect / width1, x_intersect / width2, y_intersect / height1,
+        y_intersect / height2, intersect_area, intersect_area / area1,
+        intersect_area / area2, iou
+    ]
 
     relation_features = tf.concat([
-        unary_features_broadcast1, unary_features_broadcast2, areas_1in2,
-        areas_2in1, iou
+        unary_features_broadcast1, unary_features_broadcast2,
+        tf.stack(pairwise_features_list, -1)
     ], -1)
+
+    with slim.arg_scope(self.arg_scope_fn()):
+      relation_features = slim.fully_connected(
+          relation_features,
+          num_outputs=self.options.relation_hidden_units,
+          activation_fn=tf.nn.leaky_relu,
+          scope='relation/spatial/hidden')
     return relation_features
 
   def _edge_scoring_helper(self, attn, logits):
@@ -245,13 +272,11 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
             weight * slim.fully_connected(relation_features,
                                           num_outputs=self.n_predicate,
                                           activation_fn=None,
-                                          biases_initializer=None,
                                           scope='{}/branch1'.format(scope)))
         logits_predicate_given_relation.append(
             weight * slim.fully_connected(relation_features,
                                           num_outputs=self.n_predicate,
                                           activation_fn=None,
-                                          biases_initializer=None,
                                           scope='{}/branch2'.format(scope)))
 
     logits_relation_given_predicate = tf.add_n(logits_relation_given_predicate)
@@ -503,6 +528,22 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
     tf.summary.histogram('edge_weight/edge_weight_proposal_to_proposal',
                          edge_weight_proposal_to_proposal)
 
+    # Sample a random path.
+    sampled_subject_proposal_i = utils.sample_index_not_equal(
+        ps_subject_proposal_i, n_proposal)
+    sampled_object_proposal_j = utils.sample_index_not_equal(
+        ps_subject_proposal_i, n_proposal)
+
+    sampled_path_sum = tf.add_n([
+        utils.gather_proposal_score_by_index(subject_to_proposal,
+                                             sampled_subject_proposal_i),
+        utils.gather_proposal_score_by_index(proposal_to_object,
+                                             sampled_object_proposal_j),
+        utils.gather_relation_score_by_index(proposal_to_proposal,
+                                             sampled_subject_proposal_i,
+                                             sampled_object_proposal_j)
+    ])
+
     predictions = {
         'pseudo/subject/ids':
             subject_ids,
@@ -526,16 +567,16 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
             proposal_to_proposal,
         'pseudo/graph/proposal_to_object':
             proposal_to_object,
-        'pseudo/mps_path/sum':
+        'pseudo/mps_path/optimal':
             max_path_sum,
+        'pseudo/mps_path/sampled':
+            sampled_path_sum,
         'pseudo/mps_path/subject_to_proposal':
             edge_weight_subject_to_proposal,
         'pseudo/mps_path/proposal_to_proposal':
             edge_weight_proposal_to_proposal,
         'pseudo/mps_path/proposal_to_object':
             edge_weight_proposal_to_object,
-        'proposal_top_k_mask':
-            proposal_top_k_mask,
     }
 
     return predictions
@@ -550,7 +591,8 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
     Returns:
       loss_dict: A dictionary of loss tensors keyed by names.
     """
-    max_path_sum = predictions['pseudo/mps_path/sum']
+    max_path_sum = predictions['pseudo/mps_path/optimal']
+    sampled_path_sum = predictions['pseudo/mps_path/sampled']
 
     subject_labels = predictions['pseudo/subject/ids']
     object_labels = predictions['pseudo/object/ids']
@@ -571,6 +613,10 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
     mean_max_path_sum = tf.reduce_mean(
         masked_ops.masked_avg(max_path_sum, mask=triple_mask, dim=1))
     path_sum_loss = -mean_max_path_sum
+
+    mean_sampled_path_sum = tf.reduce_mean(
+        masked_ops.masked_avg(sampled_path_sum, mask=triple_mask, dim=1))
+    sampled_path_sum_loss = mean_sampled_path_sum
 
     # Compute MED/MRD losses.
     if self.options.sigmoid_cross_entropy:
@@ -617,6 +663,8 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
     return {
         'metrics/path_sum_loss':
             self.options.path_sum_loss_weight * path_sum_loss,
+        'metrics/sampled_path_sum_loss':
+            self.options.sampled_path_sum_loss_weight * sampled_path_sum_loss,
         'metrics/med_subject_loss':
             self.options.med_loss_weight * subject_loss,
         'metric/med_object_loss':
@@ -637,7 +685,9 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
         results of calling a metric function, namely a (metric_tensor, 
         update_op) tuple. see tf.metrics for details.
     """
-    max_path_sum = predictions['pseudo/mps_path/sum']
+    max_path_sum = predictions['pseudo/mps_path/optimal']
+    sampled_path_sum = predictions['pseudo/mps_path/sampled']
+
     gt_subject_box = inputs['scene_graph/subject/box']
     gt_object_box = inputs['scene_graph/object/box']
 
@@ -671,9 +721,12 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
 
     # Path-sum.
     mean_max_path_sum = tf.keras.metrics.Mean()
+    mean_sampled_path_sum = tf.keras.metrics.Mean()
     mean_max_path_sum.update_state(_mean_fn(max_path_sum))
+    mean_sampled_path_sum.update_state(_mean_fn(sampled_path_sum))
     metric_dict.update({
         'metrics/max_path_sum': mean_max_path_sum,
+        'metrics/sampled_path_sum': mean_sampled_path_sum,
     })
 
     # Compute the classification.
