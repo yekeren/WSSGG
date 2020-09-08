@@ -114,7 +114,7 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
     return relation_features
 
   def _spatial_relation_feature(self, n_proposal, proposals):
-    """Extracts semantic relation feature for pairs of proposal nodes.
+    """Extracts semantic relation feature for any pairs of proposal nodes.
 
     Args:
       n_proposal: A [batch] int tensor.
@@ -199,7 +199,7 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
                      self.options.edge_scoring)
 
   def _multiple_relation_detection(self, n_proposal, proposals,
-                                   proposal_features, proposal_top_k_mask):
+                                   proposal_features):
     """Detects multiple relations given the ground-truth.
 
       Multiple Relation Detection (MRD):
@@ -230,8 +230,6 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
     proposal_masks = tf.sequence_mask(n_proposal,
                                       maxlen=max_n_proposal,
                                       dtype=tf.float32)
-    if proposal_top_k_mask is not None:
-      proposal_masks = tf.multiply(proposal_masks, proposal_top_k_mask)
 
     # Compute `semantic_relation_features` and `spatial_relation_features`.
     # - `semantic_relation_features`=[batch, max_n_proposal**2, semantic_dims].
@@ -394,9 +392,7 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
       inputs.pop('scene_graph/object/box')
 
     # Extract proposal features.
-    # - proposals = [batch, max_n_proposal, 4].
     # - proposal_masks = [batch, max_n_proposal].
-    # - proposal_features = [batch, max_n_proposal, dims].
     # - proposal_hiddens = [batch, max_n_proposal, feature_dims].
     n_proposal = inputs['image/n_proposal']
     proposals = inputs['image/proposal']
@@ -410,6 +406,9 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
 
     with slim.arg_scope(self.arg_scope_fn()):
       # Add an additional hidden layer with leaky relu activation.
+      proposal_features = slim.dropout(proposal_features,
+                                       self.options.dropout_keep_prob,
+                                       is_training=self.is_training)
       proposal_hiddens = slim.fully_connected(
           proposal_features,
           num_outputs=self.options.entity_hidden_units,
@@ -420,36 +419,18 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
                                       is_training=self.is_training)
 
     # Multiple Entity Detection (MED).
-    # - `score_proposal_given_entity` denotes the importance of region given
-    #    the existence of the ground-truth entity `e`.
-    #     * shape=[batch, max_n_proposal, n_entity].
-    # - `logits_entity_given_entity` is the prediction of entity given
-    #    the ground-truth entity, with the internal attention adjusted.
-    #     * shape=[batch, n_entity, n_entity].
+    # - `score_proposal_given_entity`=[batch, max_n_proposal, n_entity].
+    # - `logits_entity_given_entity`=[batch, n_entity, n_entity].
     (score_proposal_given_entity,
      logits_entity_given_entity) = self._multiple_entity_detection(
          n_proposal, proposal_hiddens)
 
-    # Get the top-k proposal boxes and build the dense graph.
-    # - `top_k_values` = [batch, entity_top_k]
-    proposal_top_k_mask = None
-    if self.options.HasField('entity_top_k'):
-      proposal_scores = tf.reduce_max(score_proposal_given_entity, -1)
-      top_k_values, _ = tf.math.top_k(proposal_scores,
-                                      self.options.entity_top_k)
-      threshold = tf.reduce_min(top_k_values, -1, keep_dims=True)
-      proposal_top_k_mask = tf.cast(proposal_scores >= threshold, tf.float32)
-
     # Multiple Relation Detection (MRD).
-    # - `score_relation_given_predicate` denotes the importance of relation
-    #    given the existence of the ground-truth predicate `p`.
-    #     * shape=[batch, max_n_proposal**2, n_predicate].
-    # - `logits_predicate_given_predicate` is the prediction of predicate given
-    #    the ground-truth predicate, with the internal attention adjusted.
-    #     * shape=[batch, n_predicate, n_predicate].
+    # - `score_relation_given_predicate`=[batch, max_n_proposal**2, n_predicate].
+    # - `logits_predicate_given_predicate`=shape=[batch, n_predicate, n_predicate].
     (score_relation_given_predicate,
      logits_predicate_given_predicate) = self._multiple_relation_detection(
-         n_proposal, proposals, proposal_hiddens, proposal_top_k_mask)
+         n_proposal, proposals, proposal_hiddens)
 
     # Parse the image-level scene-graph.
     n_triple = inputs['scene_graph/n_triple']
@@ -460,9 +441,7 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
 
     # Get the selection indices. Note: `index = id - 1`.
     # - `batch_index` = [batch, max_n_triple],
-    # - `subject_index` = [batch, max_n_triple, 2].
-    # - `object_index` = [batch, max_n_triple, 2].
-    # - `predicate_index` = [batch, max_n_triple, 2].
+    # - `[subject/object/predicate]_index` = [batch, max_n_triple, 2].
     batch_index = tf.broadcast_to(tf.expand_dims(tf.range(batch), 1),
                                   [batch, max_n_triple])
     subject_index = tf.stack([batch_index, subject_ids], -1)
@@ -470,8 +449,7 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
     predicate_index = tf.stack([batch_index, predicate_ids], -1)
 
     # Get the image-level prediction.
-    # - `subject_logits` = [batch, max_n_triple, n_entity].
-    # - `object_logits` = [batch, max_n_triple, n_entity].
+    # - `[subject/object]_logits` = [batch, max_n_triple, n_entity].
     # - `predicate_logits` = [batch, max_n_triple, n_predicate].
 
     subject_logits = tf.gather_nd(logits_entity_given_entity, subject_index)
@@ -497,9 +475,7 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
         proposal_to_proposal,
         [batch, max_n_triple, max_n_proposal, max_n_proposal])
 
-    subject_to_proposal = tf.multiply(1.0, subject_to_proposal)
-    proposal_to_proposal = tf.multiply(1.0, proposal_to_proposal)
-    proposal_to_object = tf.multiply(1.0, proposal_to_object)
+    proposal_to_proposal = tf.multiply(0.0, proposal_to_proposal)
     (max_path_sum, ps_subject_proposal_i,
      ps_object_proposal_j) = utils.compute_max_path_sum(n_proposal, n_triple,
                                                         subject_to_proposal,
@@ -520,29 +496,6 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
         proposal_to_object, ps_object_proposal_j)
     edge_weight_proposal_to_proposal = utils.gather_relation_score_by_index(
         proposal_to_proposal, ps_subject_proposal_i, ps_object_proposal_j)
-
-    tf.summary.histogram('edge_weight/edge_weight_subject_to_proposal',
-                         edge_weight_subject_to_proposal)
-    tf.summary.histogram('edge_weight/edge_weight_proposal_to_object',
-                         edge_weight_proposal_to_object)
-    tf.summary.histogram('edge_weight/edge_weight_proposal_to_proposal',
-                         edge_weight_proposal_to_proposal)
-
-    # Sample a random path.
-    sampled_subject_proposal_i = utils.sample_index_not_equal(
-        ps_subject_proposal_i, n_proposal)
-    sampled_object_proposal_j = utils.sample_index_not_equal(
-        ps_subject_proposal_i, n_proposal)
-
-    sampled_path_sum = tf.add_n([
-        utils.gather_proposal_score_by_index(subject_to_proposal,
-                                             sampled_subject_proposal_i),
-        utils.gather_proposal_score_by_index(proposal_to_object,
-                                             sampled_object_proposal_j),
-        utils.gather_relation_score_by_index(proposal_to_proposal,
-                                             sampled_subject_proposal_i,
-                                             sampled_object_proposal_j)
-    ])
 
     predictions = {
         'pseudo/subject/ids':
@@ -569,8 +522,6 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
             proposal_to_object,
         'pseudo/mps_path/optimal':
             max_path_sum,
-        'pseudo/mps_path/sampled':
-            sampled_path_sum,
         'pseudo/mps_path/subject_to_proposal':
             edge_weight_subject_to_proposal,
         'pseudo/mps_path/proposal_to_proposal':
@@ -591,87 +542,34 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
     Returns:
       loss_dict: A dictionary of loss tensors keyed by names.
     """
-    max_path_sum = predictions['pseudo/mps_path/optimal']
-    sampled_path_sum = predictions['pseudo/mps_path/sampled']
+    loss_dict = {}
 
+    # MED/MRD losses.
     subject_labels = predictions['pseudo/subject/ids']
-    object_labels = predictions['pseudo/object/ids']
-    predicate_labels = predictions['pseudo/predicate/ids']
-
     subject_logits = predictions['pseudo/subject/logits']
+
+    object_labels = predictions['pseudo/object/ids']
     object_logits = predictions['pseudo/object/logits']
+
+    predicate_labels = predictions['pseudo/predicate/ids']
     predicate_logits = predictions['pseudo/predicate/logits']
 
     n_triple = inputs['scene_graph/n_triple']
-
+    batch = n_triple.shape[0]
     max_n_triple = tf.shape(subject_labels)[1]
     triple_mask = tf.sequence_mask(n_triple,
                                    maxlen=max_n_triple,
                                    dtype=tf.float32)
-
-    # Compute path-sum loss.
-    mean_max_path_sum = tf.reduce_mean(
-        masked_ops.masked_avg(max_path_sum, mask=triple_mask, dim=1))
-    path_sum_loss = -mean_max_path_sum
-
-    mean_sampled_path_sum = tf.reduce_mean(
-        masked_ops.masked_avg(sampled_path_sum, mask=triple_mask, dim=1))
-    sampled_path_sum_loss = mean_sampled_path_sum
-
-    # Compute MED/MRD losses.
-    if self.options.sigmoid_cross_entropy:
-      triple_mask = tf.expand_dims(triple_mask, -1)
-      subject_labels = tf.one_hot(subject_labels, self.n_entity)
-      object_labels = tf.one_hot(object_labels, self.n_entity)
-      predicate_labels = tf.one_hot(predicate_labels, self.n_predicate)
-
-      subject_losses = tf.nn.sigmoid_cross_entropy_with_logits(
-          labels=subject_labels, logits=subject_logits)
-      object_losses = tf.nn.sigmoid_cross_entropy_with_logits(
-          labels=object_labels, logits=object_logits)
-      predicate_losses = tf.nn.sigmoid_cross_entropy_with_logits(
-          labels=predicate_labels, logits=predicate_logits)
-
-      subject_loss = tf.reduce_mean(
-          masked_ops.masked_avg(subject_losses, triple_mask, dim=1))
-      object_loss = tf.reduce_mean(
-          masked_ops.masked_avg(object_losses, triple_mask, dim=1))
-      predicate_loss = tf.reduce_mean(
-          masked_ops.masked_avg(predicate_losses, triple_mask, dim=1))
-
-    else:
-
-      subject_losses = tf.nn.sparse_softmax_cross_entropy_with_logits(
-          labels=subject_labels, logits=subject_logits)
-      object_losses = tf.nn.sparse_softmax_cross_entropy_with_logits(
-          labels=object_labels, logits=object_logits)
-      predicate_losses = tf.nn.sparse_softmax_cross_entropy_with_logits(
-          labels=predicate_labels, logits=predicate_logits)
-
-      subject_loss = tf.reduce_mean(
-          masked_ops.masked_avg(subject_losses, triple_mask, dim=1))
-      object_loss = tf.reduce_mean(
-          masked_ops.masked_avg(object_losses, triple_mask, dim=1))
-      predicate_loss = tf.reduce_mean(
-          masked_ops.masked_avg(predicate_losses, triple_mask, dim=1))
-
-    global_step = tf.compat.v1.train.get_or_create_global_step()
-    mrd_indicator = tf.cast(
-        tf.greater_equal(global_step, self.options.mrd_starting_step),
-        tf.float32)
-
-    return {
-        'metrics/path_sum_loss':
-            self.options.path_sum_loss_weight * path_sum_loss,
-        'metrics/sampled_path_sum_loss':
-            self.options.sampled_path_sum_loss_weight * sampled_path_sum_loss,
-        'metrics/med_subject_loss':
-            self.options.med_loss_weight * subject_loss,
-        'metric/med_object_loss':
-            self.options.med_loss_weight * object_loss,
-        'metric/mrd_predicate_loss':
-            mrd_indicator * self.options.mrd_loss_weight * predicate_loss,
-    }
+    for name, labels, logits in [
+        ('losses/med_subject_loss', subject_labels, subject_logits),
+        ('losses/med_object_loss', object_labels, object_logits),
+        ('losses/mrd_predicate_loss', predicate_labels, predicate_logits)
+    ]:
+      losses = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=labels,
+                                                              logits=logits)
+      loss = tf.reduce_mean(masked_ops.masked_avg(losses, triple_mask, dim=1))
+      loss_dict[name] = loss
+    return loss_dict
 
   def build_metrics(self, inputs, predictions, **kwargs):
     """Computes evaluation metrics.
@@ -685,9 +583,7 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
         results of calling a metric function, namely a (metric_tensor, 
         update_op) tuple. see tf.metrics for details.
     """
-    max_path_sum = predictions['pseudo/mps_path/optimal']
-    sampled_path_sum = predictions['pseudo/mps_path/sampled']
-
+    metric_dict = {}
     gt_subject_box = inputs['scene_graph/subject/box']
     gt_object_box = inputs['scene_graph/object/box']
 
@@ -695,41 +591,12 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
     ps_object_box = predictions['pseudo/object/box']
 
     n_triple = inputs['scene_graph/n_triple']
-
     max_n_triple = tf.shape(ps_subject_box)[1]
     triple_mask = tf.sequence_mask(n_triple,
                                    maxlen=max_n_triple,
                                    dtype=tf.float32)
 
-    # Compute IoU of the subject and object boxes.
-    subject_iou = box_ops.iou(gt_subject_box, ps_subject_box)
-    object_iou = box_ops.iou(gt_object_box, ps_object_box)
-
-    _mean_fn = lambda x: tf.reduce_mean(
-        masked_ops.masked_avg(tf.cast(x, tf.float32), mask=triple_mask, dim=1))
-
-    mean_subject_iou = tf.keras.metrics.Mean()
-    mean_object_iou = tf.keras.metrics.Mean()
-
-    mean_subject_iou.update_state(_mean_fn(subject_iou))
-    mean_object_iou.update_state(_mean_fn(object_iou))
-
-    metric_dict = {
-        'metrics/pseudo/subject_iou': mean_subject_iou,
-        'metrics/pseudo/object_iou': mean_object_iou,
-    }
-
-    # Path-sum.
-    mean_max_path_sum = tf.keras.metrics.Mean()
-    mean_sampled_path_sum = tf.keras.metrics.Mean()
-    mean_max_path_sum.update_state(_mean_fn(max_path_sum))
-    mean_sampled_path_sum.update_state(_mean_fn(sampled_path_sum))
-    metric_dict.update({
-        'metrics/max_path_sum': mean_max_path_sum,
-        'metrics/sampled_path_sum': mean_sampled_path_sum,
-    })
-
-    # Compute the classification.
+    # Compute the classification accuracy.
     subject_labels = predictions['pseudo/subject/ids']
     object_labels = predictions['pseudo/object/ids']
     predicate_labels = predictions['pseudo/predicate/ids']
@@ -738,46 +605,40 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
     object_logits = predictions['pseudo/object/logits']
     predicate_logits = predictions['pseudo/predicate/logits']
 
-    correct_subject = tf.equal(tf.cast(tf.argmax(subject_logits, -1), tf.int32),
-                               subject_labels)
-    correct_object = tf.equal(tf.cast(tf.argmax(object_logits, -1), tf.int32),
-                              object_labels)
-    correct_relation = tf.equal(
-        tf.cast(tf.argmax(predicate_logits, -1), tf.int32), predicate_labels)
-    subject_accuracy = tf.keras.metrics.Mean()
-    object_accuracy = tf.keras.metrics.Mean()
-    predicate_accuracy = tf.keras.metrics.Mean()
+    for name, labels, logits in [
+        ('metrics/predict_subject', subject_labels, subject_logits),
+        ('metrics/predict_object', object_labels, object_logits),
+        ('metrics/predict_predicate', predicate_labels, predicate_logits)
+    ]:
+      top1 = tf.cast(tf.argmax(logits, -1), tf.int32)
 
-    subject_accuracy.update_state(_mean_fn(correct_subject))
-    object_accuracy.update_state(_mean_fn(correct_object))
-    predicate_accuracy.update_state(_mean_fn(correct_relation))
-    metric_dict.update({
-        'metrics/predict_subject': subject_accuracy,
-        'metrics/predict_object': object_accuracy,
-        'metrics/predict_predicate': predicate_accuracy,
-    })
+      accuracy_metric = tf.keras.metrics.Accuracy()
+      accuracy_metric.update_state(labels, top1)
+      metric_dict[name] = accuracy_metric
 
-    # Compute accuracy at different IoU level.
-    for iou_threshold in [0.25, 0.5, 0.75]:
-      correct_subject = tf.greater_equal(subject_iou, iou_threshold)
-      correct_object = tf.greater_equal(object_iou, iou_threshold)
-      correct_relation = tf.logical_and(correct_subject, correct_object)
+    # Compute box recall at different IoU level.
+    subject_iou = box_ops.iou(gt_subject_box, ps_subject_box)
+    object_iou = box_ops.iou(gt_object_box, ps_object_box)
+    for iou_threshold in [0.5]:
+      recalled_subject = tf.greater_equal(subject_iou, iou_threshold)
+      recalled_object = tf.greater_equal(object_iou, iou_threshold)
+      recalled_relation = tf.logical_and(recalled_subject, recalled_object)
 
-      mean_subject_recall = tf.keras.metrics.Mean()
-      mean_object_recall = tf.keras.metrics.Mean()
-      mean_relation_recall = tf.keras.metrics.Mean()
-
-      mean_subject_recall.update_state(_mean_fn(correct_subject))
-      mean_object_recall.update_state(_mean_fn(correct_object))
-      mean_relation_recall.update_state(_mean_fn(correct_relation))
-
-      metric_dict.update({
-          'metrics/pseudo/subject_recall@%.2lf' % (iou_threshold):
-              mean_subject_recall,
-          'metrics/pseudo/object_recall@%.2lf' % (iou_threshold):
-              mean_object_recall,
-          'metrics/pseudo/relation_recall@%.2lf' % (iou_threshold):
-              mean_relation_recall,
-      })
+      for name, value in [
+          ('metrics/pseudo/iou/subject', subject_iou),
+          ('metrics/pseudo/iou/object', object_iou),
+          ('metrics/pseudo/recall/subject@%.2lf' % iou_threshold,
+           recalled_subject),
+          ('metrics/pseudo/recall/object@%.2lf' % iou_threshold,
+           recalled_object),
+          ('metrics/pseudo/recall/relation@%.2lf' % iou_threshold,
+           recalled_relation)
+      ]:
+        mean_metric = tf.keras.metrics.Mean()
+        value = tf.cast(value, tf.float32)
+        mean_value = tf.reduce_mean(
+            masked_ops.masked_avg(value, mask=triple_mask, dim=1))
+        mean_metric.update_state(mean_value)
+        metric_dict[name] = mean_metric
 
     return metric_dict
