@@ -76,7 +76,7 @@ def _create_model_fn(pipeline_proto, is_chief=True):
     # Compute losses. Note: variables created in build_loss are not trainable.
     losses = model.build_losses(features, predictions)
     for name, loss in losses.items():
-      tf.compat.v1.summary.scalar('metrics/' + name, loss)
+      tf.compat.v1.summary.scalar('losses/' + name, loss)
       tf.losses.add_loss(loss)
     for loss in tf.compat.v1.losses.get_regularization_losses():
       tf.summary.scalar(
@@ -100,7 +100,7 @@ def _create_model_fn(pipeline_proto, is_chief=True):
       lr_schedule_fn = learning_rate_schedule.create_learning_rate_schedule(
           train_config.learning_rate_schedule)
       learning_rate = lr_schedule_fn(global_step)
-      tf.compat.v1.summary.scalar('metrics/learning_rate', learning_rate)
+      tf.compat.v1.summary.scalar('losses/learning_rate', learning_rate)
 
       # Use optimizer to minimize loss.
       optimizer = optimization.create_optimizer(train_config.optimizer,

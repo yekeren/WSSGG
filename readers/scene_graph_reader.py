@@ -129,7 +129,7 @@ def _create_dataset(options, is_training, input_pipeline_context=None):
   parse_fn = lambda x: _parse_single_example(x, options)
   dataset = dataset.map(map_func=parse_fn,
                         num_parallel_calls=options.num_parallel_calls)
-  dataset = dataset.cache()
+  # dataset = dataset.cache()
 
   if is_training:
     dataset = dataset.repeat()

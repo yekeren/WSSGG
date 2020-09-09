@@ -14,8 +14,7 @@ message COCOReader {
   // Shuffle buffer size.
   optional int32 shuffle_buffer_size = 2 [default = 1000];
 
-  // Interleave cycle length.
-  optional int32 interleave_cycle_length = 3 [default = 2];
+  // Interleave cycle length.  optional int32 interleave_cycle_length = 3 [default = 2];
 
   // Number of parallel calls.
   optional int32 num_parallel_calls = 5 [default = 5];
@@ -48,4 +47,7 @@ message SceneGraphReader {
 
   // Dimensions of the pre-extracted FRCNN features.
   optional int32 feature_dimensions = 8 [default = 1536];
+
+  // Maximum number of proposals.
+  optional int32 max_n_proposal = 9 [default = 300];
 }

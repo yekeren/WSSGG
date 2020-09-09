@@ -419,6 +419,19 @@ class UtilsTest(tf.test.TestCase):
       self.assertEqual(tf.reduce_max(sampled).numpy(), 5)
       self.assertEqual(tf.reduce_min(sampled).numpy(), 1)
 
+  def test_sample_index_not_equal(self):
+    size = tf.random_uniform([800], minval=2, maxval=11, dtype=tf.int32)
+    index = tf.random.uniform([800, 5],
+                              minval=0,
+                              maxval=9999999999,
+                              dtype=tf.int32)
+    index = tf.mod(index, tf.expand_dims(size, 1))
+    self.assertTrue(tf.reduce_all(index < tf.expand_dims(size, 1)))
+
+    sampled_index = utils.sample_index_not_equal(index, size)
+    self.assertTrue(tf.reduce_all(sampled_index < tf.expand_dims(size, 1)))
+    self.assertFalse(tf.reduce_any(tf.equal(sampled_index, index)))
+
 
 if __name__ == '__main__':
   tf.test.main()

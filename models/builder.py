@@ -22,12 +22,14 @@ from models.max_path_sum import MaxPathSum
 from models.max_path_sum_v2 import MaxPathSumV2
 from models.max_path_sum_with_neg_sampling import MaxPathSumWithNegSampling
 from models.weakly_supervised_scene_graph import WeaklySupervisedSceneGraph
+from models.ws_scene_graph import WSSceneGraph
 
 MODELS = {
     model_pb2.MaxPathSum.ext: MaxPathSum,
     model_pb2.MaxPathSumV2.ext: MaxPathSumV2,
     model_pb2.MaxPathSumWithNegSampling.ext: MaxPathSumWithNegSampling,
     model_pb2.WeaklySupervisedSceneGraph.ext: WeaklySupervisedSceneGraph,
+    model_pb2.WSSceneGraph.ext: WSSceneGraph,
 }
 
 

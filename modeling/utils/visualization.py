@@ -150,13 +150,15 @@ def draw_arrow_py_func_fn(*args):
       scores - a numpy array of shape [max_pad_num].
   """
   image, total, y1_list, x1_list, y2_list, x2_list, labels, scores = args
-  for i in range(total):
+  for i in range(total - 1, -1, -1):
     y1, x1, y2, x2 = y1_list[i], x1_list[i], y2_list[i], x2_list[i]
     display_str = ''
-    if labels and scores:
+    if labels is not None and scores is not None:
       display_str = '%i%% %s' % (int(scores[i] * 100), labels[i].decode('utf8'))
-    elif labels:
+    elif labels is not None:
       display_str = '%s' % (labels[i].decode('utf8'))
+    elif scores is not None:
+      display_str = '%i%%' % (int(scores[i] * 100))
     color = STANDARD_COLORS[i % len(STANDARD_COLORS)]
 
     draw_arrow_on_image_array(image,
@@ -184,13 +186,15 @@ def draw_bounding_box_py_func_fn(*args):
     uint8 numpy array with shape (height, width, 3) with overlaid boxes.
   """
   image, total, boxes, labels, scores = args
-  for i in range(total):
+  for i in range(total - 1, -1, -1):
     ymin, xmin, ymax, xmax = boxes[i]
     display_str = ''
-    if labels and scores:
+    if labels is not None and scores is not None:
       display_str = '%i%% %s' % (int(scores[i] * 100), labels[i].decode('utf8'))
-    elif labels:
+    elif labels is not None:
       display_str = '%s' % (labels[i].decode('utf8'))
+    elif scores is not None:
+      display_str = '%i%%' % (int(scores[i] * 100))
     color = STANDARD_COLORS[i % len(STANDARD_COLORS)]
 
     draw_bounding_box_on_image_array(image,

@@ -24,6 +24,8 @@ import tensorflow as tf
 from modeling.utils import box_ops
 from modeling.utils import masked_ops
 
+from object_detection.core.post_processing import batch_multiclass_non_max_suppression
+
 
 def compute_max_path_sum(n_proposal, n_triple, subject_to_proposal,
                          proposal_to_proposal, proposal_to_object):
@@ -283,3 +285,156 @@ def sample_one_based_ids_not_equal(ids, max_id=100):
   # Note `ids` starts with 1.
   sampled_ids = tf.mod(ids - 1 + offset, max_id) + 1
   return sampled_ids
+
+
+def sample_index_not_equal(index, size):
+  """Random sample index NOT equal to `index`.
+
+  Args:
+    index: A [batch, max_n_triple] int tensor. 
+    size: A [batch] int tensor, the size of the indexing array.
+
+  Returns:
+    sampled_index: A [batch, max_n_triple] int tensor, each entry has value 
+      sampled_index[i,j] in [0...size[i]) and should not equal to index[i,j].
+  """
+  batch = index.shape[0].value
+  max_n_triple = tf.shape(index)[1]
+
+  random_value = tf.random.uniform([batch, max_n_triple],
+                                   minval=0,
+                                   maxval=9999999999,
+                                   dtype=tf.int32)
+  size_minus_1 = tf.expand_dims(size, 1) - 1
+  offset = tf.mod(random_value, size_minus_1)
+
+  sampled_index = tf.mod((index + offset + 1), tf.expand_dims(size, 1))
+
+  return sampled_index
+
+
+def scatter_pseudo_entity_detection_labels(n_entity,
+                                           n_proposal,
+                                           proposals,
+                                           entity_index,
+                                           proposal_index,
+                                           iou_threshold=0.5):
+  """Creates pseudo entity detection labels.
+
+    Besides labeling the denoted entries, also propogate pseudo annotations
+    to highly overlapped boxes.
+
+  Args:
+    n_entity: A integer, total number of entities.
+    n_proposal: A [batch] int tensor.
+    proposals: A [batch, max_n_proposal, 4] float tensor.
+    entity_index: A [batch, max_n_triple] int tensor, denoting the entity index
+      in the range [0, n_entity]. The 0-th entry denotes the background.
+    proposal_index: A [batch, max_n_triple] in tensor, denoting the proposal
+      index in the range [0, n_proposal - 1].
+    iou_threshold: Also labels the boxes overlapped >= `iou_threshold`.
+
+  Returns:
+    pseudo_labels: A [batch, max_n_proposal, 1 + n_entity] float tensor.
+  """
+  batch = n_proposal.shape[0].value
+  max_n_proposal = tf.shape(proposals)[1]
+  max_n_triple = tf.shape(entity_index)[1]
+
+  index_batch = tf.broadcast_to(tf.expand_dims(tf.range(batch), 1),
+                                [batch, max_n_triple])
+
+  # Create a zero tensor to scatter on.
+  # Note: background is NOT properly set, need to call `normalize_pseudo_entity_detection_labels`.
+  indices = tf.stack([index_batch, proposal_index, entity_index], axis=-1)
+  pseudo_labels = tf.scatter_nd(indices,
+                                updates=tf.fill([batch, max_n_triple], 1.0),
+                                shape=[batch, max_n_proposal, 1 + n_entity])
+
+  # Propogate box annotations.
+  # - `iou` = [batch, max_n_proposal, max_n_proposal].
+  proposal_broadcast1 = tf.broadcast_to(tf.expand_dims(
+      proposals, 1), [batch, max_n_proposal, max_n_proposal, 4])
+  proposal_broadcast2 = tf.broadcast_to(tf.expand_dims(
+      proposals, 2), [batch, max_n_proposal, max_n_proposal, 4])
+  iou = box_ops.iou(proposal_broadcast1, proposal_broadcast2)
+
+  propogate_matrix = tf.cast(iou > iou_threshold, tf.float32)
+  pseudo_labels = tf.matmul(propogate_matrix, pseudo_labels)
+  return pseudo_labels
+
+
+def post_process_pseudo_entity_detection_labels(n_entity,
+                                                n_proposal,
+                                                proposals,
+                                                pseudo_labels,
+                                                normalize=False):
+  """Noarmalizes pseudo entity detection labels.
+
+  Args:
+    n_entity: A integer, total number of entities.
+    n_proposal: A [batch] int tensor.
+    proposals: A [batch, max_n_proposal, 4] float tensor.
+    pseudo_labels: A [batch, max_n_proposal, 1 + n_entity] float tensor.
+
+  Returns:
+    normalzied_pseudo_labels: A [batch, max_n_proposal, 1 + n_entity] float tensor.
+  """
+  batch = n_proposal.shape[0].value
+  max_n_proposal = tf.shape(proposals)[1]
+
+  # Add the batckground dimension to the 0-th index.
+  background = tf.cast(tf.equal(0.0, tf.reduce_sum(pseudo_labels, -1)),
+                       tf.float32)
+  background = tf.concat([
+      tf.expand_dims(background, -1),
+      tf.fill([batch, max_n_proposal, n_entity], 0.0)
+  ], -1)
+  pseudo_labels = tf.add(pseudo_labels, background)
+
+  # Normalize the labels.
+  if normalize:
+    sumv = tf.reduce_sum(pseudo_labels, -1, keep_dims=True)
+    pseudo_labels = tf.math.divide(pseudo_labels, sumv)
+
+  return pseudo_labels
+
+
+def nms_post_process(n_proposal,
+                     proposals,
+                     proposal_scores,
+                     max_output_size_per_class=10,
+                     max_total_size=20,
+                     iou_threshold=0.5,
+                     score_threshold=0.001):
+  """Non-max-suppression process.
+
+  Args:
+    n_proposal: A [batch] int tensor.
+    proposals: A [batch, max_n_proposal, 4] float tensor.
+    proposal_scores: A [batch, max_n_proposal, n_entity] float tensor.
+
+  Returns:
+    num_detections: A [batch_size] int32 tensor indicating the number of
+      valid detections per batch item. Only the top num_detections[i] entries in
+      nms_boxes[i], nms_scores[i] and nms_class[i] are valid. The rest of the
+      entries are zero paddings.
+    detection_boxes: A [batch_size, max_detections, 4] float32 tensor
+      containing the non-max suppressed boxes.
+    detection_scores: A [batch_size, max_detections] float32 tensor containing
+      the scores of the boxes.
+    detection_classes: A [batch_size, max_detections] float32 tensor
+      containing the class for boxes.
+  """
+  proposals = tf.expand_dims(proposals, axis=2)
+
+  (detection_boxes, detection_scores, detection_classes,
+   num_detections) = tf.image.combined_non_max_suppression(
+       boxes=proposals,
+       scores=proposal_scores,
+       max_output_size_per_class=max_output_size_per_class,
+       max_total_size=max_total_size,
+       iou_threshold=iou_threshold,
+       score_threshold=score_threshold)
+  detection_classes = tf.cast(detection_classes, tf.int32)
+  return num_detections, detection_boxes, detection_scores, detection_classes

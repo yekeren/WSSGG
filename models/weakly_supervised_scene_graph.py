@@ -179,6 +179,9 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
           num_outputs=self.options.relation_hidden_units,
           activation_fn=tf.nn.leaky_relu,
           scope='relation/spatial/hidden')
+      relation_features = slim.dropout(relation_features,
+                                       self.options.dropout_keep_prob,
+                                       is_training=self.is_training)
     return relation_features
 
   def _edge_scoring_helper(self, attn, logits):
@@ -330,21 +333,21 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
 
     with slim.arg_scope(self.arg_scope_fn()):
       # Two branches.
-      weights_initializer = tf.compat.v1.constant_initializer(
-          self.entity_emb_weights.transpose())
+      # weights_initializer = tf.compat.v1.constant_initializer(
+      #     self.entity_emb_weights.transpose())
       logits_proposal_given_entity = slim.fully_connected(
           proposal_features,
           num_outputs=self.n_entity,
           activation_fn=None,
-          weights_initializer=weights_initializer,
-          biases_initializer=None,
+          # weights_initializer=weights_initializer,
+          # biases_initializer=None,
           scope="MED/proposal_branch1")
       logits_entity_given_proposal = slim.fully_connected(
           proposal_features,
           num_outputs=self.n_entity,
           activation_fn=None,
-          weights_initializer=weights_initializer,
-          biases_initializer=None,
+          # weights_initializer=weights_initializer,
+          # biases_initializer=None,
           scope="MED/proposal_branch2")
 
     attn_proposal_given_entity = masked_ops.masked_softmax(
@@ -406,9 +409,9 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
 
     with slim.arg_scope(self.arg_scope_fn()):
       # Add an additional hidden layer with leaky relu activation.
-      proposal_features = slim.dropout(proposal_features,
-                                       self.options.dropout_keep_prob,
-                                       is_training=self.is_training)
+      #proposal_features = slim.dropout(proposal_features,
+      #                                 self.options.dropout_keep_prob,
+      #                                 is_training=self.is_training)
       proposal_hiddens = slim.fully_connected(
           proposal_features,
           num_outputs=self.options.entity_hidden_units,
@@ -610,10 +613,9 @@ class WeaklySupervisedSceneGraph(model_base.ModelBase):
         ('metrics/predict_object', object_labels, object_logits),
         ('metrics/predict_predicate', predicate_labels, predicate_logits)
     ]:
-      top1 = tf.cast(tf.argmax(logits, -1), tf.int32)
-
-      accuracy_metric = tf.keras.metrics.Accuracy()
-      accuracy_metric.update_state(labels, top1)
+      bingo = tf.equal(tf.cast(tf.argmax(logits, -1), tf.int32), labels)
+      accuracy_metric = tf.keras.metrics.Mean()
+      accuracy_metric.update_state(bingo)
       metric_dict[name] = accuracy_metric
 
     # Compute box recall at different IoU level.

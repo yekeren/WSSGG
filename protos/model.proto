@@ -1,6 +1,7 @@
 syntax = "proto2";
 
 import "protos/hyperparams.proto";
+import "protos/post_process.proto";
 
 message Model {
   extensions 1000 to max;
@@ -26,27 +27,186 @@ message MaxPathSum {
   // Hyperparameters for the fully-connected layers.
   optional Hyperparams fc_hyperparams = 5;
 
-  // Maximum number of proposals to use.
-  optional uint32 max_n_proposal = 6 [default = 300];
+  // If true, use a linear modeling, otherwise, use a 2-layer model.
+  optional bool linear_modeling = 7 [default = true];
+
+  // IoU threshold to compute metrics.
+  optional float iou_threshold = 8 [default = 0.5];
+
+  // If true, also train word embedding.
+  optional bool train_word_embedding = 11 [default = false];
+}
+
+message MaxPathSumWithNegSampling {
+  extend Model {
+    optional MaxPathSumWithNegSampling ext = 1001;
+  }
+
+  // Meta file containing the token to id mapping.
+  optional string token_to_id_meta_file = 1;
+
+  // Entity embedding file, data shape=[1 + #entities, dims].
+  optional string entity_emb_npy_file = 2;
+
+  // Predicate embedding file, data shape=[1 + #predicates, dims].
+  optional string predicate_emb_npy_file = 3;
+
+  // Keep probability of dropout layers.
+  optional float dropout_keep_prob = 4 [default = 1.0];
+
+  // Hyperparameters for the fully-connected layers.
+  optional Hyperparams fc_hyperparams = 5;
 
   // If true, use a linear modeling, otherwise, use a 2-layer model.
   optional bool linear_modeling = 7 [default = true];
 
-  // IoU threshold to process non-max-suppression.
+  // IoU threshold to compute metrics.
   optional float iou_threshold = 8 [default = 0.5];
-
-  // Type of the non-max-suppression loss.
-  optional NMSLoss nms_loss = 9;
-
-  // Weight of the nms loss.
-  optional float nms_loss_weight = 10 [default = 1.0];
 
   // If true, also train word embedding.
   optional bool train_word_embedding = 11 [default = false];
 
-  // If true, sample negative path to compute the loss.
-  optional bool sample_negative_path = 12 [default = false];
+  // Margin for the triplet loss.
+  optional float triplet_loss_margin = 12 [default = 1.0];
+
+  // Number of negative examples.
+  optional uint32 triplet_loss_n_negatives = 13 [default = 20];
 }
+
+enum EdgeScoring {
+  ATTENTION = 1;
+  CLASSIFICATION = 2;
+  ATTENTION_x_CLASSIFICATION = 3;
+}
+
+message WeaklySupervisedSceneGraph {
+  extend Model {
+    optional WeaklySupervisedSceneGraph ext = 1002;
+  }
+
+  // Meta file containing the token to id mapping.
+  optional string token_to_id_meta_file = 1;
+
+  // Entity embedding file, data shape=[1 + #entities, dims].
+  optional string entity_emb_npy_file = 2;
+
+  // Predicate embedding file, data shape=[1 + #predicates, dims].
+  optional string predicate_emb_npy_file = 3;
+
+  // Keep probability of dropout layers.
+  optional float dropout_keep_prob = 4 [default = 1.0];
+
+  // If true, apply dropout on attention.
+  optional bool attention_dropout = 5 [default = false];
+
+  // Hyperparameters for the fully-connected layers.
+  optional Hyperparams fc_hyperparams = 6;
+
+  // Entity: number of hidden units.
+  optional uint32 entity_hidden_units = 7 [default = 300];
+
+  // Relation: number of hidden units.
+  optional uint32 relation_hidden_units = 8 [default = 10];
+
+  // IoU threshold to compute metrics.
+  optional float iou_threshold = 9 [default = 0.5];
+
+  // If true, use sigmoid cross entropy loss.
+  optional bool sigmoid_cross_entropy = 10 [default = false];
+
+  // Multiple Entity Detection loss weight.
+  optional float med_loss_weight = 11 [default = 1.0];
+
+  // Multiple Relation Detection loss weight.
+  optional float mrd_loss_weight = 12 [default = 1.0];
+
+  // Weight of the MRD semantic feature.
+  optional float mrd_semantic_feature_weight = 13 [default = 1.0];
+
+  // Weight of the MRD spatial feature.
+  optional float mrd_spatial_feature_weight = 14 [default = 1.0];
+
+  // Edge scoring method.
+  optional EdgeScoring edge_scoring = 15 [default = ATTENTION_x_CLASSIFICATION];
+
+  // Path-sum loss.
+  optional float path_sum_loss_weight = 16 [default = 0.0];
+
+  // Sampled Path-sum loss.
+  optional float sampled_path_sum_loss_weight = 17 [default = 0.0];
+
+  // Global step to start multiple relation detection training.
+  optional uint32 mrd_starting_step = 18 [default = 0];
+
+  // Top-k proposal to use, for building relations.
+  optional uint32 entity_top_k = 19 [default = 10];
+}
+
+message MaxPathSumV2 {
+  extend Model {
+    optional MaxPathSumV2 ext = 1003;
+  }
+
+  // Meta file containing the token to id mapping.
+  optional string token_to_id_meta_file = 1;
+
+  // Entity embedding file, data shape=[1 + #entities, dims].
+  optional string entity_emb_npy_file = 2;
+
+  // Predicate embedding file, data shape=[1 + #predicates, dims].
+  optional string predicate_emb_npy_file = 3;
+
+  // Keep probability of dropout layers.
+  optional float dropout_keep_prob = 4 [default = 1.0];
+
+  // Hyperparameters for the fully-connected layers.
+  optional Hyperparams fc_hyperparams = 5;
+
+  // Number of hidden units.
+  optional uint32 hidden_units = 7 [default = 300];
+
+  // IoU threshold to compute metrics.
+  optional float iou_threshold = 8 [default = 0.5];
+}
+
+//message MaxPathSum {
+//  extend Model {
+//    optional MaxPathSum ext = 1000;
+//  }
+//
+//  // Meta file containing the token to id mapping.
+//  optional string token_to_id_meta_file = 1;
+//
+//  // Entity embedding file, data shape=[1 + #entities, dims].
+//  optional string entity_emb_npy_file = 2;
+//
+//  // Predicate embedding file, data shape=[1 + #predicates, dims].
+//  optional string predicate_emb_npy_file = 3;
+//
+//  // Keep probability of dropout layers.
+//  optional float dropout_keep_prob = 4 [default = 1.0];
+//
+//  // Hyperparameters for the fully-connected layers.
+//  optional Hyperparams fc_hyperparams = 5;
+//
+//  // If true, use a linear modeling, otherwise, use a 2-layer model.
+//  optional bool linear_modeling = 7 [default = true];
+//
+//  // IoU threshold to process non-max-suppression.
+//  optional float iou_threshold = 8 [default = 0.5];
+//
+//  // Type of the non-max-suppression loss.
+//  optional NMSLoss nms_loss = 9;
+//
+//  // Weight of the nms loss.
+//  optional float nms_loss_weight = 10 [default = 1.0];
+//
+//  // If true, also train word embedding.
+//  optional bool train_word_embedding = 11 [default = false];
+//
+//  // If true, sample negative path to compute the loss.
+//  optional bool sample_negative_path = 12 [default = false];
+//}
 
 message NMSLoss {
   oneof nms_loss_oneof {
@@ -71,4 +231,58 @@ message L2Loss {
 
 message L2DistillationLoss {
   optional float weight = 1 [default = 1.0];
+}
+
+message WSSceneGraph {
+  extend Model {
+    optional WSSceneGraph ext = 1008;
+  }
+
+  // Meta file containing the token to id mapping.
+  optional string token_to_id_meta_file = 1;
+
+  // Entity embedding file, data shape=[1 + #entities, dims].
+  optional string entity_emb_npy_file = 2;
+
+  // Predicate embedding file, data shape=[1 + #predicates, dims].
+  optional string predicate_emb_npy_file = 3;
+
+  // Keep probability of dropout layers.
+  optional float dropout_keep_prob = 4 [default = 1.0];
+
+  // If true, apply dropout on attention.
+  optional bool attention_dropout = 5 [default = false];
+
+  // Hyperparameters for the fully-connected layers.
+  optional Hyperparams fc_hyperparams = 6;
+
+  // Entity: number of hidden units.
+  optional uint32 entity_hidden_units = 7 [default = 300];
+
+  // Relation: number of hidden units.
+  optional uint32 relation_hidden_units = 8 [default = 10];
+
+  // IoU threshold to compute metrics.
+  optional float iou_threshold = 9 [default = 0.5];
+
+  // Multiple Entity Detection loss weight.
+  optional float med_loss_weight = 11 [default = 1.0];
+
+  // Multiple Relation Detection loss weight.
+  optional float mrd_loss_weight = 12 [default = 1.0];
+
+  // Weight of the MRD semantic feature.
+  optional float mrd_semantic_feature_weight = 13 [default = 1.0];
+
+  // Weight of the MRD spatial feature.
+  optional float mrd_spatial_feature_weight = 14 [default = 1.0];
+
+  // Edge scoring method.
+  optional EdgeScoring edge_scoring = 15 [default = ATTENTION_x_CLASSIFICATION];
+
+  // Post processing.
+  optional PostProcess post_process = 16;
+
+  // IoU threshold to propogate annotations.
+  optional float iou_threshold_to_propogate = 17 [default = 0.5];
 }
