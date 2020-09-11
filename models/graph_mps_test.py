@@ -20,12 +20,12 @@ from __future__ import print_function
 import numpy as np
 import tensorflow as tf
 
-from models.mps_graph import MPSGraph
+from models.graph_mps import GraphMPS
 
 tf.compat.v1.enable_eager_execution()
 
 
-class MPSGraphTest(tf.test.TestCase):
+class GraphMPSTest(tf.test.TestCase):
 
   def test_compute_max_path_sum_batch1_triple1(self):
     """ Basic test case.
@@ -47,7 +47,7 @@ class MPSGraphTest(tf.test.TestCase):
         dtype=np.float32)
 
     (max_path_sum, subject_proposal_index,
-     object_proposal_index) = MPSGraph.compute_max_path_sum(
+     object_proposal_index) = GraphMPS.compute_max_path_sum(
          n_proposal=np.array([n_proposal]),
          n_triple=np.array([n_triple]),
          subject_to_proposal=subject_to_proposal.reshape(
@@ -80,7 +80,7 @@ class MPSGraphTest(tf.test.TestCase):
         dtype=np.float32)
 
     (max_path_sum, subject_proposal_index,
-     object_proposal_index) = MPSGraph.compute_max_path_sum(
+     object_proposal_index) = GraphMPS.compute_max_path_sum(
          n_proposal=np.array([n_proposal]),
          n_triple=np.array([n_triple]),
          subject_to_proposal=subject_to_proposal.reshape(
@@ -113,7 +113,7 @@ class MPSGraphTest(tf.test.TestCase):
         dtype=np.float32)
 
     (max_path_sum, subject_proposal_index,
-     object_proposal_index) = MPSGraph.compute_max_path_sum(
+     object_proposal_index) = GraphMPS.compute_max_path_sum(
          n_proposal=np.array([n_proposal]),
          n_triple=np.array([n_triple]),
          subject_to_proposal=subject_to_proposal.reshape(
@@ -160,7 +160,7 @@ class MPSGraphTest(tf.test.TestCase):
         dtype=np.float32)
 
     (max_path_sum, subject_proposal_index,
-     object_proposal_index) = MPSGraph.compute_max_path_sum(
+     object_proposal_index) = GraphMPS.compute_max_path_sum(
          n_proposal=np.array([n_proposal]),
          n_triple=np.array([n_triple]),
          subject_to_proposal=np.expand_dims(
@@ -221,7 +221,7 @@ class MPSGraphTest(tf.test.TestCase):
         dtype=np.float32)
 
     (max_path_sum, subject_proposal_index,
-     object_proposal_index) = MPSGraph.compute_max_path_sum(
+     object_proposal_index) = GraphMPS.compute_max_path_sum(
          n_proposal=np.array([n_proposal]),
          n_triple=np.array([n_triple]),
          subject_to_proposal=np.expand_dims(
@@ -282,7 +282,7 @@ class MPSGraphTest(tf.test.TestCase):
         dtype=np.float32)
 
     (max_path_sum, subject_proposal_index,
-     object_proposal_index) = MPSGraph.compute_max_path_sum(
+     object_proposal_index) = GraphMPS.compute_max_path_sum(
          n_proposal=np.array([n_proposal]),
          n_triple=np.array([n_triple]),
          subject_to_proposal=np.expand_dims(

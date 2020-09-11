@@ -22,7 +22,7 @@ import tensorflow as tf
 from modeling.utils import masked_ops
 
 
-class MPSGraph(object):
+class GraphMPS(object):
   """Graph structure to explore the maximum path sum. """
 
   def __init__(self,

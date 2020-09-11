@@ -33,7 +33,7 @@ from modeling.layers import id_to_token
 from modeling.utils import box_ops
 from modeling.utils import hyperparams
 from modeling.utils import masked_ops
-from models.mps_graph import MPSGraph
+from models.graph_mps import GraphMPS
 
 from models import model_base
 from models import utils
@@ -610,13 +610,13 @@ class WSSceneGraph(model_base.ModelBase):
     max_n_triple = tf.shape(inputs['scene_graph/subject'])[1]
 
     # Max-Path-Sum solution.
-    it = 0
+    it = 1
     graph_proposal_scores = predictions['refinement/iter_%i/proposal_probas' %
                                         it]
     graph_relation_scores = predictions['refinement/iter_%i/relation_probas' %
                                         it]
 
-    mps_graph = MPSGraph(
+    mps_graph = GraphMPS(
         n_triple=n_triple,
         n_proposal=n_proposal,
         subject_to_proposal=tf.gather_nd(
@@ -894,7 +894,7 @@ class WSSceneGraph(model_base.ModelBase):
 
     proposal_to_proposal_weight = 1.0
     for i in range(1, 1 + self.options.n_refine_iteration):
-      mps_graph = MPSGraph(
+      mps_graph = GraphMPS(
           n_triple=n_triple,
           n_proposal=n_proposal,
           subject_to_proposal=tf.gather_nd(
@@ -1009,7 +1009,7 @@ class WSSceneGraph(model_base.ModelBase):
                                           i]
       graph_relation_scores = predictions['refinement/iter_%i/relation_probas' %
                                           i]
-      mps_graph = MPSGraph(
+      mps_graph = GraphMPS(
           n_triple=n_triple,
           n_proposal=n_proposal,
           subject_to_proposal=tf.gather_nd(
