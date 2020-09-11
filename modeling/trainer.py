@@ -286,7 +286,7 @@ def evaluate(pipeline_proto, model_dir):
   estimator = tf.estimator.Estimator(model_fn=model_fn,
                                      model_dir=model_dir,
                                      config=run_config)
-  estimator.evaluate(eval_input_fn)
+  estimator.evaluate(eval_input_fn, steps=eval_config.steps)
 
 
 def predict(pipeline_proto,
@@ -339,7 +339,7 @@ def debug(pipeline_proto, model_dir):
   """
   for example_id, example in enumerate(predict(pipeline_proto, model_dir)):
     for key in sorted(example.keys()):
-      print('%s, shape=%s' % (key, example[key].shape))
+      print('example[\'%s\'], shape=%s' % (key, example[key].shape))
     import pdb
     pdb.set_trace()
     j = 1

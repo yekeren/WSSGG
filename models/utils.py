@@ -27,200 +27,6 @@ from modeling.utils import masked_ops
 from object_detection.core.post_processing import batch_multiclass_non_max_suppression
 
 
-def compute_max_path_sum(n_proposal, n_triple, subject_to_proposal,
-                         proposal_to_proposal, proposal_to_object):
-  """Computes the max path sum solution.
-
-    Given the batch index and the image-level triple (subject, predicate, object),
-    we explore the max path sum solution in the following graph:
-
-                   `subject`      
-                  /  |   |  \           (subject_to_proposal  - n_proposal edges)
-                p1  p2   p3  p4   `dp0`
-    `predicate`  | X | X | X |          (proposal_to_proposal - n_proposal x n_proposal edges)
-                p1   p2  p3  p4   `dp1`
-                  \  |   |  /           (proposal_to_object   - n_proposal edges)
-                   `object`       `dp2`
-
-    Dynamic programming solution (batch - b, tuple - t, proposal - p, proposal' - q):
-      dp0[b, t, p] = subject_to_proposal[b, t, p]
-      dp1[b, t, p] = max_q(dp0[b, t, q] + proposal_to_proposal[b, t, q, p])
-      dp2[b, t] = max_q(dp1[b, t, q] + proposal_to_object[b, t, q])
-
-    Backtracking the optimal path:
-      bt1[b, t, p] = argmax_q(dp0[b, t, q] + proposal_to_proposal[b, t, q, p])
-      bt2[b, t] = max_q(dp1[b, t, q] + proposal_to_object[b, t, q])
-
-  Args:
-    n_proposal: A [batch] int tensor.
-    n_triple: A [batch] int tensor.
-    subject_to_proposal: A [batch, max_n_triple, max_n_proposal] float tensor.
-    proposal_to_proposal: A [batch, max_n_triple, max_n_proposal, max_n_proposal] float tensor.
-    proposal_to_object: A [batch, max_n_triple, max_n_proposal] float tensor.
-
-  Returns:
-    max_path_sum: A [batch, max_n_triple] float tensor, the max-path-sum.
-    subject_proposal_index: A [batch, max_n_triple] integer tensor, index of the subject proposal.
-    object_proposal_index: A [batch, max_n_triple] integer tensor, index of the object proposal.
-  """
-  batch = subject_to_proposal.shape[0]
-  max_n_triple = tf.shape(subject_to_proposal)[1]
-  max_n_proposal = tf.shape(subject_to_proposal)[-1]
-
-  # Computes triple / proposal mask.
-  # - triple_mask = [batch, max_n_triple]
-  # - proposal_mask = [batch, max_n_proposal]
-  triple_mask = tf.sequence_mask(n_triple, max_n_triple, dtype=tf.int32)
-  proposal_mask = tf.sequence_mask(n_proposal, max_n_proposal, dtype=tf.float32)
-
-  # DP0.
-  dp0 = subject_to_proposal
-
-  # DP1, note the masked version of dp1 = tf.reduce_max(dp1, 2)
-  dp1 = tf.expand_dims(dp0, -1) + proposal_to_proposal
-  mask = tf.expand_dims(tf.expand_dims(proposal_mask, 1), -1)
-  bt1 = masked_ops.masked_argmax(data=dp1, mask=mask, dim=2)
-  bt1 = tf.cast(bt1, tf.int32)
-  dp1 = tf.squeeze(masked_ops.masked_maximum(data=dp1, mask=mask, dim=2), 2)
-
-  # DP2, note the masked version of dp2 = tf.reduce_max(dp2, 2).
-  dp2 = dp1 + proposal_to_object
-  mask = tf.expand_dims(proposal_mask, 1)
-  bt2 = masked_ops.masked_argmax(data=dp2, mask=mask, dim=2)
-  bt2 = tf.cast(bt2, tf.int32)
-  dp2 = tf.squeeze(masked_ops.masked_maximum(data=dp2, mask=mask, dim=2), 2)
-
-  # Backtrack the optimal path.
-  max_path_sum, object_proposal_index = dp2, bt2
-  batch_index = tf.broadcast_to(tf.expand_dims(tf.range(batch), 1),
-                                [batch, max_n_triple])
-  triple_index = tf.broadcast_to(tf.expand_dims(tf.range(max_n_triple), 0),
-                                 [batch, max_n_triple])
-  track_index = tf.stack([batch_index, triple_index, bt2], -1)
-  subject_proposal_index = tf.gather_nd(bt1, track_index)
-
-  # Mask on triple dimension.
-  max_path_sum = tf.multiply(max_path_sum, tf.cast(triple_mask, tf.float32))
-  subject_proposal_index = tf.add(subject_proposal_index * triple_mask,
-                                  triple_mask - 1)
-  object_proposal_index = tf.add(object_proposal_index * triple_mask,
-                                 triple_mask - 1)
-
-  return max_path_sum, subject_proposal_index, object_proposal_index
-
-
-def gather_proposal_by_index(proposals, proposal_index):
-  """Gathers proposal box or proposal features by index..
-
-  This is a helper function to extract max-path-sum solution.
-
-  Args:
-    proposals: A [batch, max_n_proposal, dims] float tensor.
-      It could be either proposal box (dims=4) or proposal features.
-    proposal_index: A [batch, max_n_triple] int tensor.
-
-  Returns:
-    A [batch, max_n_triple, dims] float tensor, the gathered proposal info,
-      could be proposal boxes or proposal features.
-  """
-  batch = proposals.shape[0].value
-  dims = proposals.shape[-1].value
-  max_n_triple = tf.shape(proposal_index)[1]
-  max_n_proposal = tf.shape(proposals)[1]
-
-  proposals = tf.broadcast_to(tf.expand_dims(proposals, 1),
-                              [batch, max_n_triple, max_n_proposal, dims])
-
-  batch_index = tf.broadcast_to(tf.expand_dims(tf.range(batch), 1),
-                                [batch, max_n_triple])
-  triple_index = tf.broadcast_to(tf.expand_dims(tf.range(max_n_triple), 0),
-                                 [batch, max_n_triple])
-  index = tf.stack([batch_index, triple_index, proposal_index], -1)
-  return tf.gather_nd(proposals, index)
-
-
-def gather_proposal_score_by_index(entity_to_proposal, proposal_index):
-  """Gathers graph edge weight from entity node to proposal node.
-
-  This is a helper function to extract max-path-sum solution.
-
-  Args:
-    entity_to_proposal: A [batch, max_n_triple, max_n_proposal] float tensor.
-      It could be either `subject_to_proposal` or `proposal_to_object`.
-    proposal_index: A [batch, max_n_triple] int tensor.
-
-  Returns:
-    A [batch, max_n_triple] float tensor, denoting the weight.
-  """
-  batch = entity_to_proposal.shape[0].value
-  max_n_triple = tf.shape(entity_to_proposal)[1]
-  max_n_proposal = tf.shape(entity_to_proposal)[2]
-
-  batch_index = tf.broadcast_to(tf.expand_dims(tf.range(batch), 1),
-                                [batch, max_n_triple])
-  triple_index = tf.broadcast_to(tf.expand_dims(tf.range(max_n_triple), 0),
-                                 [batch, max_n_triple])
-  index = tf.stack([batch_index, triple_index, proposal_index], -1)
-  return tf.gather_nd(entity_to_proposal, index)
-
-
-def gather_relation_by_index(relations, subject_index, object_index):
-  """Gathers relation by index.
-
-  This is a helper function to extract max-path-sum solution.
-
-  Args:
-    relations: A [batch, max_n_proposal, max_n_proposal, dims] float tensor.
-    subject_index: A [batch, max_n_triple] int tensor.
-    object_index: A [batch, max_n_triple] int tensor.
-
-  Returns:
-    A [batch, max_n_triple, dims] float tensor, the relation embedding vector.
-  """
-  batch = relations.shape[0].value
-  dims = relations.shape[-1].value
-  max_n_triple = tf.shape(subject_index)[1]
-  max_n_proposal = tf.shape(relations)[1]
-
-  relations = tf.broadcast_to(
-      tf.expand_dims(relations, 1),
-      [batch, max_n_triple, max_n_proposal, max_n_proposal, dims])
-
-  batch_index = tf.broadcast_to(tf.expand_dims(tf.range(batch), 1),
-                                [batch, max_n_triple])
-  triple_index = tf.broadcast_to(tf.expand_dims(tf.range(max_n_triple), 0),
-                                 [batch, max_n_triple])
-  index = tf.stack([batch_index, triple_index, subject_index, object_index], -1)
-  return tf.gather_nd(relations, index)
-
-
-def gather_relation_score_by_index(proposal_to_proposal, subject_index,
-                                   object_index):
-  """Gathers graph edge weight from subject proposal to object proposal.
-
-  This is a helper function to extract max-path-sum solution.
-
-  Args: 
-    proposal_to_proposal: A [batch, max_n_triple, max_n_proposal, 
-      max_n_proposal] float tensor.
-    subject_index: A [batch, max_n_triple] int tensor.
-    object_index: A [batch, max_n_triple] int tensor.
-
-  Returns:
-    A [batch, max_n_triple] float tensor, denoting the weight.
-  """
-  batch = proposal_to_proposal.shape[0].value
-  max_n_triple = tf.shape(proposal_to_proposal)[1]
-  max_n_proposal = tf.shape(proposal_to_proposal)[2]
-
-  batch_index = tf.broadcast_to(tf.expand_dims(tf.range(batch), 1),
-                                [batch, max_n_triple])
-  triple_index = tf.broadcast_to(tf.expand_dims(tf.range(max_n_triple), 0),
-                                 [batch, max_n_triple])
-  index = tf.stack([batch_index, triple_index, subject_index, object_index], -1)
-  return tf.gather_nd(proposal_to_proposal, index)
-
-
 def gather_overlapped_box_indicator_by_iou(n_proposal,
                                            proposals,
                                            n_reference,
@@ -325,7 +131,7 @@ def scatter_pseudo_entity_detection_labels(n_entity,
     to highly overlapped boxes.
 
   Args:
-    n_entity: A integer, total number of entities.
+    n_entity: An integer, total number of entities.
     n_proposal: A [batch] int tensor.
     proposals: A [batch, max_n_proposal, 4] float tensor.
     entity_index: A [batch, max_n_triple] int tensor, denoting the entity index
@@ -344,14 +150,14 @@ def scatter_pseudo_entity_detection_labels(n_entity,
   index_batch = tf.broadcast_to(tf.expand_dims(tf.range(batch), 1),
                                 [batch, max_n_triple])
 
-  # Create a zero tensor to scatter on.
-  # Note: background is NOT properly set, need to call `normalize_pseudo_entity_detection_labels`.
+  # Note: background is NOT properly set, need to call `normalize_pseudo_detection_labels`.
   indices = tf.stack([index_batch, proposal_index, entity_index], axis=-1)
   pseudo_labels = tf.scatter_nd(indices,
                                 updates=tf.fill([batch, max_n_triple], 1.0),
                                 shape=[batch, max_n_proposal, 1 + n_entity])
 
   # Propogate box annotations.
+  # - `pseudo_labels` = [batch, max_n_proposal, 1 + n_entity].
   # - `iou` = [batch, max_n_proposal, max_n_proposal].
   proposal_broadcast1 = tf.broadcast_to(tf.expand_dims(
       proposals, 1), [batch, max_n_proposal, max_n_proposal, 4])
@@ -364,39 +170,99 @@ def scatter_pseudo_entity_detection_labels(n_entity,
   return pseudo_labels
 
 
-def post_process_pseudo_entity_detection_labels(n_entity,
-                                                n_proposal,
-                                                proposals,
-                                                pseudo_labels,
-                                                normalize=False):
-  """Noarmalizes pseudo entity detection labels.
+def scatter_pseudo_relation_detection_labels(n_predicate,
+                                             n_proposal,
+                                             proposals,
+                                             predicate_index,
+                                             subject_proposal_index,
+                                             object_proposal_index,
+                                             iou_threshold=0.5):
+  """Creates pseudo relation detection labels.
+
+    Besides labeling the denoted entries, also propogate pseudo annotations
+    to highly overlapped relations.
 
   Args:
-    n_entity: A integer, total number of entities.
+    n_predicate: An integer, total number of predicates.
     n_proposal: A [batch] int tensor.
     proposals: A [batch, max_n_proposal, 4] float tensor.
-    pseudo_labels: A [batch, max_n_proposal, 1 + n_entity] float tensor.
+    predicate_index: A [batch, max_n_triple] int tensor, denoting the predicate
+      index in the range [0, n_predicate]. The 0-th entry denotes the background.
+    subject_proposal_index: A [batch, max_n_triple] in tensor, denoting the
+      proposal index in the range [0, n_proposal - 1].
+    object_proposal_index: A [batch, max_n_triple] in tensor, denoting the
+      proposal index in the range [0, n_proposal - 1].
+    iou_threshold: Also labels the boxes overlapped >= `iou_threshold`.
 
   Returns:
-    normalzied_pseudo_labels: A [batch, max_n_proposal, 1 + n_entity] float tensor.
+    Pseudo relation labels of shape [batch, max_n_proposal, max_n_proposal, 1 + n_predicate].
   """
   batch = n_proposal.shape[0].value
   max_n_proposal = tf.shape(proposals)[1]
+  max_n_triple = tf.shape(predicate_index)[1]
+
+  index_batch = tf.broadcast_to(tf.expand_dims(tf.range(batch), 1),
+                                [batch, max_n_triple])
+
+  # Note: background is NOT properly set, need to call `normalize_pseudo_detection_labels`.
+  indices = tf.stack([
+      index_batch, subject_proposal_index, object_proposal_index,
+      predicate_index
+  ], -1)
+  pseudo_labels = tf.scatter_nd(
+      indices,
+      updates=tf.fill([batch, max_n_triple], 1.0),
+      shape=[batch, max_n_proposal, max_n_proposal, 1 + n_predicate])
+
+  # Propogate box annotations.
+  # - `pseudo_labels` = [batch, max_n_proposal, max_n_proposal, 1 + n_predicate].
+  # - `iou` = [batch, max_n_proposal, max_n_proposal].
+  proposal_broadcast1 = tf.broadcast_to(tf.expand_dims(
+      proposals, 1), [batch, max_n_proposal, max_n_proposal, 4])
+  proposal_broadcast2 = tf.broadcast_to(tf.expand_dims(
+      proposals, 2), [batch, max_n_proposal, max_n_proposal, 4])
+  iou = box_ops.iou(proposal_broadcast1, proposal_broadcast2)
+  propogate_matrix = tf.cast(iou > iou_threshold, tf.float32)
+
+  # Broadcast and matmul.
+  # - `propogate_matrix` = [batch, 1 + n_predicate, max_n_proposal, max_n_proposal].
+  # - `pseudo_labels` = [batch, 1 + n_predicate, max_n_proposal, max_n_proposal]
+  propogate_matrix = tf.broadcast_to(
+      tf.expand_dims(propogate_matrix, -1),
+      [batch, max_n_proposal, max_n_proposal, 1 + n_predicate])
+
+  propogate_matrix = tf.transpose(propogate_matrix, [0, 3, 1, 2])
+  pseudo_labels = tf.transpose(pseudo_labels, [0, 3, 1, 2])
+  pseudo_labels = tf.matmul(tf.matmul(propogate_matrix, pseudo_labels),
+                            propogate_matrix)
+
+  # Transpose back.
+  pseudo_labels = tf.transpose(pseudo_labels, [0, 2, 3, 1])
+  return pseudo_labels
+
+
+def post_process_pseudo_detection_labels(pseudo_labels):
+  """Noarmalizes pseudo entity detection labels.
+
+  Args:
+    pseudo_labels: A [batch, max_n_proposal, 1 + n_classes] float tensor.
+
+  Returns:
+    normalzied_pseudo_labels: A [batch, max_n_proposal, 1 + n_classes] float tensor.
+  """
+  batch = pseudo_labels.shape[0].value
+  max_n_proposal = tf.shape(pseudo_labels)[1]
+  n_classes = pseudo_labels.shape[-1].value - 1
 
   # Add the batckground dimension to the 0-th index.
   background = tf.cast(tf.equal(0.0, tf.reduce_sum(pseudo_labels, -1)),
                        tf.float32)
   background = tf.concat([
       tf.expand_dims(background, -1),
-      tf.fill([batch, max_n_proposal, n_entity], 0.0)
+      tf.fill([batch, max_n_proposal, n_classes], 0.0)
   ], -1)
   pseudo_labels = tf.add(pseudo_labels, background)
-
-  # Normalize the labels.
-  if normalize:
-    sumv = tf.reduce_sum(pseudo_labels, -1, keep_dims=True)
-    pseudo_labels = tf.math.divide(pseudo_labels, sumv)
-
+  pseudo_labels = tf.cast(pseudo_labels > 0, tf.float32)
   return pseudo_labels
 
 
@@ -438,3 +304,29 @@ def nms_post_process(n_proposal,
        score_threshold=score_threshold)
   detection_classes = tf.cast(detection_classes, tf.int32)
   return num_detections, detection_boxes, detection_scores, detection_classes
+
+
+def compute_sigmoid_focal_loss(labels, logits, gamma=2.0, alpha=0.25):
+  """Compute focal loss.
+
+  Args:
+    labels: A [batch, max_n_proposal, n_classes] float tensor.
+    logits: A [batch, max_n_proposal, n_classes] float tensor.
+
+  Returns:
+    loss: A [batch, max_n_proposal, n_classes] float tensor.
+  """
+  per_entry_cross_ent = (tf.nn.sigmoid_cross_entropy_with_logits(labels=labels,
+                                                                 logits=logits))
+  prediction_probabilities = tf.sigmoid(logits)
+  p_t = ((labels * prediction_probabilities) + ((1 - labels) *
+                                                (1 - prediction_probabilities)))
+  modulating_factor = 1.0
+  if gamma:
+    modulating_factor = tf.pow(1.0 - p_t, gamma)
+  alpha_weight_factor = 1.0
+  if alpha is not None:
+    alpha_weight_factor = (labels * alpha + (1 - labels) * (1 - alpha))
+  focal_cross_entropy_loss = (modulating_factor * alpha_weight_factor *
+                              per_entry_cross_ent)
+  return focal_cross_entropy_loss
