@@ -23,7 +23,7 @@ from modeling.utils import masked_ops
 
 
 class GraphMPS(object):
-  """Graph structure to explore the maximum path sum. """
+  """Explores the Maximum-Path-Sum solution. """
 
   def __init__(self,
                n_triple,
@@ -34,7 +34,7 @@ class GraphMPS(object):
                subject_to_proposal_weight=1.0,
                proposal_to_proposal_weight=1.0,
                proposal_to_object_weight=1.0):
-    """Initializes the instance.
+    """Initializes the object.
 
     Args:
       n_triple: A [batch] int tensor.
@@ -137,7 +137,7 @@ class GraphMPS(object):
                                           self.subject_proposal_index)
 
   def get_object_box(self, proposals):
-    """Returns the subject box.
+    """Returns the object box.
 
     Args:
       proposals: A [batch, max_n_proposal, 4] float tensor.

@@ -34,6 +34,7 @@ from modeling.utils import box_ops
 from modeling.utils import hyperparams
 from modeling.utils import masked_ops
 from models.graph_mps import GraphMPS
+from models.graph_bs import GraphBS
 
 from models import model_base
 from models import utils
@@ -616,7 +617,7 @@ class WSSceneGraph(model_base.ModelBase):
     graph_relation_scores = predictions['refinement/iter_%i/relation_probas' %
                                         it]
 
-    mps_graph = GraphMPS(
+    mps = GraphMPS(
         n_triple=n_triple,
         n_proposal=n_proposal,
         subject_to_proposal=tf.gather_nd(
@@ -631,17 +632,42 @@ class WSSceneGraph(model_base.ModelBase):
         proposal_to_proposal_weight=1.0,
         proposal_to_object_weight=1.0)
 
+    bs = GraphBS(n_proposal=n_proposal,
+                 proposals=proposals,
+                 proposal_scores=graph_proposal_scores,
+                 relation_scores=tf.reshape(
+                     graph_relation_scores,
+                     [batch, max_n_proposal, max_n_proposal, self.n_predicate]),
+                 iou_threshold=0.5,
+                 beam_size=50)
+
     predictions.update({
         'pseudo/subject/box':
-            mps_graph.get_subject_box(proposals),
+            mps.get_subject_box(proposals),
         'pseudo/object/box':
-            mps_graph.get_object_box(proposals),
+            mps.get_object_box(proposals),
         'pseudo/mps_path/subject_to_proposal':
-            mps_graph.subject_to_proposal_edge_weight,
+            mps.subject_to_proposal_edge_weight,
         'pseudo/mps_path/proposal_to_proposal':
-            mps_graph.proposal_to_proposal_edge_weight,
+            mps.proposal_to_proposal_edge_weight,
         'pseudo/mps_path/proposal_to_object':
-            mps_graph.proposal_to_object_edge_weight,
+            mps.proposal_to_object_edge_weight,
+        'beam_search/subject':
+            self.id2entity(bs.subject_id),
+        'beam_search/subject/score':
+            bs.subject_score,
+        'beam_search/subject/box':
+            bs.get_subject_box(proposals),
+        'beam_search/object':
+            self.id2entity(bs.object_id),
+        'beam_search/object/score':
+            bs.object_score,
+        'beam_search/object/box':
+            bs.get_object_box(proposals),
+        'beam_search/predicate':
+            self.id2predicate(bs.predicate_id),
+        'beam_search/predicate/score':
+            bs.predicate_score,
     })
     return predictions
 
@@ -894,7 +920,7 @@ class WSSceneGraph(model_base.ModelBase):
 
     proposal_to_proposal_weight = 1.0
     for i in range(1, 1 + self.options.n_refine_iteration):
-      mps_graph = GraphMPS(
+      mps = GraphMPS(
           n_triple=n_triple,
           n_proposal=n_proposal,
           subject_to_proposal=tf.gather_nd(
@@ -912,17 +938,17 @@ class WSSceneGraph(model_base.ModelBase):
           n_proposal=n_proposal,
           proposals=proposals,
           subject_index=subject_ids,
-          subject_proposal_index=mps_graph.subject_proposal_index,
+          subject_proposal_index=mps.subject_proposal_index,
           object_index=object_ids,
-          object_proposal_index=mps_graph.object_proposal_index,
+          object_proposal_index=mps.object_proposal_index,
           iou_threshold_to_propogate=self.options.iou_threshold_to_propogate)
       pseudo_relation_labels = self._compute_pseudo_relation_labels(
           n_predicate=self.n_predicate,
           n_proposal=n_proposal,
           proposals=proposals,
           predicate_index=predicate_ids,
-          subject_proposal_index=mps_graph.subject_proposal_index,
-          object_proposal_index=mps_graph.object_proposal_index,
+          subject_proposal_index=mps.subject_proposal_index,
+          object_proposal_index=mps.object_proposal_index,
           iou_threshold_to_propogate=self.options.iou_threshold_to_propogate)
 
       sgr_proposal_loss = self._compute_proposal_refinement_losses(
@@ -1009,7 +1035,7 @@ class WSSceneGraph(model_base.ModelBase):
                                           i]
       graph_relation_scores = predictions['refinement/iter_%i/relation_probas' %
                                           i]
-      mps_graph = GraphMPS(
+      mps = GraphMPS(
           n_triple=n_triple,
           n_proposal=n_proposal,
           subject_to_proposal=tf.gather_nd(
@@ -1024,10 +1050,8 @@ class WSSceneGraph(model_base.ModelBase):
           proposal_to_proposal_weight=1.0,
           proposal_to_object_weight=1.0)
 
-      subject_iou = box_ops.iou(gt_subject_box,
-                                mps_graph.get_subject_box(proposals))
-      object_iou = box_ops.iou(gt_object_box,
-                               mps_graph.get_object_box(proposals))
+      subject_iou = box_ops.iou(gt_subject_box, mps.get_subject_box(proposals))
+      object_iou = box_ops.iou(gt_object_box, mps.get_object_box(proposals))
 
       recalled_subject = tf.greater_equal(subject_iou, iou_threshold)
       recalled_object = tf.greater_equal(object_iou, iou_threshold)
