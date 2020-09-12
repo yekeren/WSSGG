@@ -287,8 +287,8 @@ class WSSceneGraph(model_base.ModelBase):
         logits_relation_given_predicate, relation_masks, dim=1)
     attn_relation_given_predicate = slim.dropout(
         attn_relation_given_predicate,
-        self.options.dropout_keep_prob,
-        is_training=(self.is_training and self.options.attention_dropout))
+        self.options.attn_dropout_keep_prob,
+        is_training=self.is_training)
 
     logits_predicate_given_predicate = tf.matmul(
         attn_relation_given_predicate,
@@ -353,8 +353,8 @@ class WSSceneGraph(model_base.ModelBase):
         dim=1)
     attn_proposal_given_entity = slim.dropout(
         attn_proposal_given_entity,
-        self.options.dropout_keep_prob,
-        is_training=(self.is_training and self.options.attention_dropout))
+        self.options.attn_dropout_keep_prob,
+        is_training=self.is_training)
 
     logits_entity_given_entity = tf.matmul(attn_proposal_given_entity,
                                            logits_entity_given_proposal,
@@ -1074,35 +1074,35 @@ class WSSceneGraph(model_base.ModelBase):
         mean_metric.update_state(mean_value)
         metric_dict[name] = mean_metric
 
-    # Compute detection recall.
-    input_data_fields = standard_fields.InputDataFields
-    detection_fields = standard_fields.DetectionResultFields
+    # # Compute detection recall.
+    # input_data_fields = standard_fields.InputDataFields
+    # detection_fields = standard_fields.DetectionResultFields
 
-    for i in range(1, 1 + self.options.n_refine_iteration):
-      num_detection = predictions['refinement/iter_%i/num_detection' % i]
-      detection_boxes = predictions['refinement/iter_%i/detection_boxes' % i]
-      detection_scores = predictions['refinement/iter_%i/detection_scores' % i]
-      detection_classes = predictions['refinement/iter_%i/detection_class_ids' %
-                                      i]
+    # for i in range(1, 1 + self.options.n_refine_iteration):
+    #   num_detection = predictions['refinement/iter_%i/num_detection' % i]
+    #   detection_boxes = predictions['refinement/iter_%i/detection_boxes' % i]
+    #   detection_scores = predictions['refinement/iter_%i/detection_scores' % i]
+    #   detection_classes = predictions['refinement/iter_%i/detection_class_ids' %
+    #                                   i]
 
-      for (name, gt_box,
-           gt_label) in [('metrics@%i/refinement/recall@100/subject' % i,
-                          gt_subject_box, subject_ids),
-                         ('metrics@%i/refinement/recall@100/object' % i,
-                          gt_object_box, object_ids)]:
+    #   for (name, gt_box,
+    #        gt_label) in [('metrics@%i/refinement/recall@100/subject' % i,
+    #                       gt_subject_box, subject_ids),
+    #                      ('metrics@%i/refinement/recall@100/object' % i,
+    #                       gt_object_box, object_ids)]:
 
-        evaluator = coco_evaluation.CocoDetectionEvaluator(self.categories)
-        eval_dict = {
-            input_data_fields.key: inputs['id'],
-            'num_groundtruth_boxes_per_image': n_triple,
-            input_data_fields.groundtruth_boxes: gt_box,
-            input_data_fields.groundtruth_classes: 1 + gt_label,
-            'num_det_boxes_per_image': num_detection,
-            detection_fields.detection_boxes: detection_boxes,
-            detection_fields.detection_scores: detection_scores,
-            detection_fields.detection_classes: 1 + detection_classes,
-        }
-        eval_ops = evaluator.get_estimator_eval_metric_ops(eval_dict)
-        metric_dict[name] = eval_ops['DetectionBoxes_Recall/AR@100']
+    #     evaluator = coco_evaluation.CocoDetectionEvaluator(self.categories)
+    #     eval_dict = {
+    #         input_data_fields.key: inputs['id'],
+    #         'num_groundtruth_boxes_per_image': n_triple,
+    #         input_data_fields.groundtruth_boxes: gt_box,
+    #         input_data_fields.groundtruth_classes: 1 + gt_label,
+    #         'num_det_boxes_per_image': num_detection,
+    #         detection_fields.detection_boxes: detection_boxes,
+    #         detection_fields.detection_scores: detection_scores,
+    #         detection_fields.detection_classes: 1 + detection_classes,
+    #     }
+    #     eval_ops = evaluator.get_estimator_eval_metric_ops(eval_dict)
+    #     metric_dict[name] = eval_ops['DetectionBoxes_Recall/AR@100']
 
     return metric_dict
