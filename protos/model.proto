@@ -250,8 +250,8 @@ message WSSceneGraph {
   // Keep probability of dropout layers.
   optional float dropout_keep_prob = 4 [default = 1.0];
 
-  // If true, apply dropout on attention.
-  optional bool attention_dropout = 5 [default = false];
+  // Keep probability of attention dropout layers.
+  optional float attn_dropout_keep_prob = 5 [default = 1.0];
 
   // Hyperparameters for the fully-connected layers.
   optional Hyperparams fc_hyperparams = 6;
@@ -264,12 +264,6 @@ message WSSceneGraph {
 
   // IoU threshold to compute metrics.
   optional float iou_threshold = 9 [default = 0.5];
-
-  // Multiple Entity Detection loss weight.
-  optional float med_loss_weight = 11 [default = 1.0];
-
-  // Multiple Relation Detection loss weight.
-  optional float mrd_loss_weight = 12 [default = 1.0];
 
   // Weight of the MRD semantic feature.
   optional float mrd_semantic_feature_weight = 13 [default = 1.0];
@@ -285,4 +279,16 @@ message WSSceneGraph {
 
   // IoU threshold to propogate annotations.
   optional float iou_threshold_to_propogate = 17 [default = 0.5];
+
+  // IoU threshold to propogate annotations.
+  optional float iou_threshold_to_propogate_relation = 19 [default = 0.5];
+
+  // Refine iterations.
+  optional uint32 n_refine_iteration = 18 [default = 1];
+
+  // Weight of the refine loss.
+  optional float refine_loss_weight = 23 [default = 1.0];
+
+  // If true, the refine process uses sigmoid prediction.
+  optional bool refine_use_softmax = 24 [default = false];
 }

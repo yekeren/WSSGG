@@ -34,13 +34,15 @@ from modeling.utils import box_ops
 from modeling.utils import hyperparams
 from modeling.utils import masked_ops
 from models.graph_mps import GraphMPS
-from models.graph_bs import GraphBS
+from models.graph_nms import GraphNMS
 
 from models import model_base
 from models import utils
 
 from object_detection.metrics import coco_evaluation
 from object_detection.core import standard_fields
+
+from metrics.scene_graph_evaluation import SceneGraphEvaluator
 
 
 class WSSceneGraph(model_base.ModelBase):
@@ -120,67 +122,6 @@ class WSSceneGraph(model_base.ModelBase):
     ], -1)
     return relation_features
 
-  def _spatial_relation_feature(self, n_proposal, proposals):
-    """Extracts semantic relation feature for any pairs of proposal nodes.
-
-    Args:
-      n_proposal: A [batch] int tensor.
-      proposals: A [batch, max_n_proposal, 4] float tensor.
-
-    Returns:
-      A [batch, max_n_proposal, max_n_proposal, relation_dims] float tensor.
-    """
-    batch = proposals.shape[0].value
-    max_n_proposal = tf.shape(proposals)[1]
-
-    # Compute single features.
-    centers = box_ops.center(proposals)
-    sizes = box_ops.size(proposals)
-    areas = tf.expand_dims(box_ops.area(proposals), -1)
-
-    unary_features = tf.concat([proposals, centers, sizes, areas], -1)
-    unary_features_broadcast1 = tf.broadcast_to(
-        tf.expand_dims(unary_features, 1),
-        [batch, max_n_proposal, max_n_proposal, unary_features.shape[-1]])
-    unary_features_broadcast2 = tf.broadcast_to(
-        tf.expand_dims(unary_features, 2),
-        [batch, max_n_proposal, max_n_proposal, unary_features.shape[-1]])
-
-    # Compute pairwise features.
-    proposals_broadcast1 = tf.broadcast_to(tf.expand_dims(
-        proposals, 1), [batch, max_n_proposal, max_n_proposal, 4])
-    proposals_broadcast2 = tf.broadcast_to(tf.expand_dims(
-        proposals, 2), [batch, max_n_proposal, max_n_proposal, 4])
-
-    height1, width1 = tf.unstack(box_ops.size(proposals_broadcast1), axis=-1)
-    height2, width2 = tf.unstack(box_ops.size(proposals_broadcast2), axis=-1)
-    area1 = box_ops.area(proposals_broadcast1)
-    area2 = box_ops.area(proposals_broadcast2)
-
-    x_distance = box_ops.x_distance(proposals_broadcast1, proposals_broadcast2)
-    y_distance = box_ops.y_distance(proposals_broadcast1, proposals_broadcast2)
-    x_intersect = box_ops.x_intersect_len(proposals_broadcast1,
-                                          proposals_broadcast2)
-    y_intersect = box_ops.y_intersect_len(proposals_broadcast1,
-                                          proposals_broadcast2)
-    intersect_area = box_ops.area(
-        box_ops.intersect(proposals_broadcast1, proposals_broadcast2))
-    iou = box_ops.iou(proposals_broadcast1, proposals_broadcast2)
-
-    pairwise_features_list = [
-        x_distance, y_distance, x_distance / width1, x_distance / width2,
-        y_distance / height1, y_distance / height2, x_intersect, y_intersect,
-        x_intersect / width1, x_intersect / width2, y_intersect / height1,
-        y_intersect / height2, intersect_area, intersect_area / area1,
-        intersect_area / area2, iou
-    ]
-
-    relation_features = tf.concat([
-        unary_features_broadcast1, unary_features_broadcast2,
-        tf.stack(pairwise_features_list, -1)
-    ], -1)
-    return relation_features
-
   def _edge_scoring_helper(self, attn, logits):
     """Applies edge scoring.  """
     normalizer_fn = tf.nn.softmax
@@ -201,103 +142,53 @@ class WSSceneGraph(model_base.ModelBase):
                                    proposal_features):
     """Detects multiple relations given the ground-truth.
 
-      Multiple Relation Detection (MRD):
-      - attn_relation_given_predicate = [batch, max_n_proposal**2, n_predicate(p-gt)]
-          * Given that predicate p-gt exists, find the responsible relation i->j.
-          * For each p-gt: sum_{i,j} (attn_relation_given_predicate[i, j, p-gt]) = 1.
-      - logits_predicate_given_relation = [batch, max_n_proposal**2,
-        n_predicate(p-pred)].
-          * Logits to classify relation i->j.
-      - logits_predicate_given_predicate = [batch, n_predicate(p-gt), 
-        n_predicate(p-pred)].
-          * Given the predicate p-gt, predict the logits through optimizing the 
-            weighting `attn_relation_given_predicate`.
-
     Args:
       n_proposal: A [batch] int tensor.
       proposals: A [batch, max_n_proposal, 4] float tensor.
       proposal_features: A [batch, max_n_proposal, feature_dims] float tensor.
 
     Returns:
-      score_relation_given_predicate: Attention distribution of relations given
-        the predicate. shape=[batch, max_n_proposal**2, n_predicate].
-      logits_predicate_given_predicate: Predicate prediction.
-        shape=[batch, n_predicate, n_predicate].
+      relation_logits: A [batch, max_n_proposal, max_n_proposal, n_predicate]
+        float tensor.
     """
+
     batch = proposal_features.shape[0].value
     max_n_proposal = tf.shape(proposal_features)[1]
     proposal_masks = tf.sequence_mask(n_proposal,
                                       maxlen=max_n_proposal,
                                       dtype=tf.float32)
 
-    # Compute `semantic_relation_features` and `spatial_relation_features`.
-    # - `semantic_relation_features`=[batch, max_n_proposal**2, semantic_dims].
-    # - `spatial_relation_features`=[batch, max_n_proposal**2, spatial_dims].
-    with tf.variable_scope('MRD'):
-      semantic_relation_features = self._semantic_relation_feature(
-          n_proposal, proposal_features)
-      spatial_relation_features = self._spatial_relation_feature(
-          n_proposal, proposals)
+    weights_initializer = tf.compat.v1.constant_initializer(
+        self.predicate_emb_weights.transpose())
 
-    semantic_relation_features = tf.reshape(semantic_relation_features, [
-        batch, max_n_proposal * max_n_proposal,
-        semantic_relation_features.shape[-1].value
-    ])
-    spatial_relation_features = tf.reshape(spatial_relation_features, [
-        batch, max_n_proposal * max_n_proposal,
-        spatial_relation_features.shape[-1].value
-    ])
+    # Predict the predicate given the subject/object.
+    # - logits_predicate_given_subject = [batch, max_n_proposal, n_predicate].
+    # - logits_predicate_given_object = [batch, max_n_proposal, n_predicate].
+    with slim.arg_scope(self.arg_scope_fn()):
+      logits_predicate_given_subject = slim.fully_connected(
+          proposal_features,
+          num_outputs=self.n_predicate,
+          activation_fn=None,
+          weights_initializer=weights_initializer,
+          biases_initializer=None,
+          scope='MRD/predicate_given_subject')
+      logits_predicate_given_object = slim.fully_connected(
+          proposal_features,
+          num_outputs=self.n_predicate,
+          activation_fn=None,
+          weights_initializer=weights_initializer,
+          biases_initializer=None,
+          scope='MRD/predicate_given_object')
 
-    # Two-branch MRD approach and late fusion (i.e., fusing the logits).
-    # - `relation_features` = [batch, max_n_proposal**2, dims].
-    # - `relation_masks` = [batch, max_n_proposal**2, 1].
-    relation_masks = tf.multiply(tf.expand_dims(proposal_masks, 1),
-                                 tf.expand_dims(proposal_masks, 2))
-    relation_masks = tf.reshape(relation_masks,
-                                [batch, max_n_proposal * max_n_proposal, 1])
-
-    logits_relation_given_predicate = []
-    logits_predicate_given_relation = []
-
-    for (scope, weight, relation_features) in [
-        ('MRD/semantic', self.options.mrd_semantic_feature_weight,
-         semantic_relation_features),
-        ('MRD/spatial', self.options.mrd_spatial_feature_weight,
-         spatial_relation_features)
-    ]:
-      with slim.arg_scope(self.arg_scope_fn()):
-        logits_relation_given_predicate.append(
-            weight * slim.fully_connected(relation_features,
-                                          num_outputs=self.n_predicate,
-                                          activation_fn=None,
-                                          scope='{}/branch1'.format(scope)))
-        logits_predicate_given_relation.append(
-            weight * slim.fully_connected(relation_features,
-                                          num_outputs=self.n_predicate,
-                                          activation_fn=None,
-                                          scope='{}/branch2'.format(scope)))
-
-    logits_relation_given_predicate = tf.add_n(logits_relation_given_predicate)
-    logits_predicate_given_relation = tf.add_n(logits_predicate_given_relation)
-
-    # Compute MRD results.
-    # - `attn_relation_given_predicate` = [batch,  max_n_proposal**2, n_predicate].
-    # - `logits_predicate_given_predicate` = [batch,  n_predicate, n_predicate].
-    attn_relation_given_predicate = masked_ops.masked_softmax(
-        logits_relation_given_predicate, relation_masks, dim=1)
-    attn_relation_given_predicate = slim.dropout(
-        attn_relation_given_predicate,
-        self.options.attn_dropout_keep_prob,
-        is_training=self.is_training)
-
-    logits_predicate_given_predicate = tf.matmul(
-        attn_relation_given_predicate,
-        logits_predicate_given_relation,
-        transpose_a=True)
-
-    detection_score = self._edge_scoring_helper(
-        attn_relation_given_predicate, logits_predicate_given_relation)
-    return detection_score, logits_predicate_given_predicate
+    # Aggregate the relation score.
+    # - relation_logits = [batch, max_n_proposal, max_n_proposal, n_predicate].
+    logits_predicate_given_subject = tf.expand_dims(
+        logits_predicate_given_subject, 2)
+    logits_predicate_given_object = tf.expand_dims(
+        logits_predicate_given_object, 1)
+    relation_logits = tf.minimum(logits_predicate_given_subject,
+                                 logits_predicate_given_object)
+    return relation_logits
 
   def _multiple_entity_detection(self, n_proposal, proposal_features):
     """Detects multiple entities given the ground-truth.
@@ -328,10 +219,11 @@ class WSSceneGraph(model_base.ModelBase):
                                       maxlen=max_n_proposal,
                                       dtype=tf.float32)
 
+    weights_initializer = tf.compat.v1.constant_initializer(
+        self.entity_emb_weights.transpose())
+
+    # Two branches.
     with slim.arg_scope(self.arg_scope_fn()):
-      # Two branches.
-      weights_initializer = tf.compat.v1.constant_initializer(
-          self.entity_emb_weights.transpose())
       logits_proposal_given_entity = slim.fully_connected(
           proposal_features,
           num_outputs=self.n_entity,
@@ -392,51 +284,6 @@ class WSSceneGraph(model_base.ModelBase):
           scope=scope)
     return logits_entity_given_proposal
 
-  def _refine_relation_scores_once(self, n_proposal, proposals,
-                                   proposal_features, scope):
-    """Refines scene graph relation score predictions.
-
-    Args:
-      n_proposal: A [batch] int tensor.
-      proposals: A [batch, max_n_proposal, 4] float tensor.
-      proposal_features: A [batch, max_n_proposal, dims] float tensor.
-      scope: Variable scope.
-
-    Returns:
-      logits_predicate_given_relation:
-        A [batch, max_n_proposal**2, 1 + n_predicate] float tensor.
-    """
-    batch = proposal_features.shape[0].value
-    max_n_proposal = tf.shape(proposal_features)[1]
-    proposal_masks = tf.sequence_mask(n_proposal,
-                                      maxlen=max_n_proposal,
-                                      dtype=tf.float32)
-
-    with tf.variable_scope(scope):
-      # Compute `semantic_relation_features` and `spatial_relation_features`.
-      # - `semantic_relation_features`=[batch, max_n_proposal**2, semantic_dims].
-      # - `spatial_relation_features`=[batch, max_n_proposal**2, spatial_dims].
-      semantic_relation_features = self._semantic_relation_feature(
-          n_proposal, proposal_features)
-      spatial_relation_features = self._spatial_relation_feature(
-          n_proposal, proposals)
-
-      # Predict predicate given the relation features.
-      logits_predicate_given_relation = []
-      for name, relation_features in [('semantic', semantic_relation_features),
-                                      ('spatial', spatial_relation_features)]:
-        relation_features = tf.reshape(relation_features, [
-            batch, max_n_proposal * max_n_proposal,
-            relation_features.shape[-1].value
-        ])
-        logits_predicate_given_relation.append(
-            slim.fully_connected(relation_features,
-                                 num_outputs=1 + self.n_predicate,
-                                 activation_fn=None,
-                                 scope=name))
-    logits_predicate_given_relation = tf.add_n(logits_predicate_given_relation)
-    return logits_predicate_given_relation
-
   def _refine_scene_graph(self, n_proposal, proposals, proposal_features,
                           n_refine_iteration):
     """Refines scene graph predictions.
@@ -463,50 +310,22 @@ class WSSceneGraph(model_base.ModelBase):
         'refinement/n_refine_iteration': tf.constant(n_refine_iteration)
     }
 
+    refine_activation_fn = tf.nn.sigmoid
+    if self.options.refine_use_softmax:
+      refine_activation_fn = tf.nn.softmax
+
     for i in range(1, 1 + n_refine_iteration):
       # Refine proposal scores.
       proposal_scores = self._refine_proposal_scores_once(
           n_proposal,
           proposal_features,
           scope='SGR/iter_%i/proposal/logits' % i)
-      proposal_probas = tf.nn.sigmoid(proposal_scores)[:, :, 1:]
+      proposal_probas = refine_activation_fn(proposal_scores)
+      proposal_probas = proposal_probas[:, :, 1:]  # Exclude background.
 
-      # Refine relation scores.
-      relation_scores = self._refine_relation_scores_once(
-          n_proposal,
-          proposals,
-          proposal_features,
-          scope='SGR/iter_%i/relation/logits' % i)
-      relation_probas = tf.nn.sigmoid(relation_scores)[:, :, 1:]
-
-      (num_detections, detection_boxes, detection_scores,
-       detection_class_ids) = utils.nms_post_process(
-           n_proposal,
-           proposals,
-           proposal_probas,
-           self.options.post_process.max_output_size_per_class,
-           self.options.post_process.max_total_size,
-           self.options.post_process.iou_threshold,
-           score_threshold=self.options.post_process.score_threshold)
       predictions.update({
-          'refinement/iter_%i/proposal_scores' % i:
-              proposal_scores,
-          'refinement/iter_%i/proposal_probas' % i:
-              proposal_probas,
-          'refinement/iter_%i/relation_scores' % i:
-              relation_scores,
-          'refinement/iter_%i/relation_probas' % i:
-              relation_probas,
-          'refinement/iter_%i/num_detection' % i:
-              num_detections,
-          'refinement/iter_%i/detection_boxes' % i:
-              detection_boxes,
-          'refinement/iter_%i/detection_scores' % i:
-              detection_scores,
-          'refinement/iter_%i/detection_class_ids' % i:
-              detection_class_ids,
-          'refinement/iter_%i/detection_classes' % i:
-              self.id2entity(detection_class_ids),
+          'refinement/iter_%i/proposal_scores' % i: proposal_scores,
+          'refinement/iter_%i/proposal_probas' % i: proposal_probas,
       })
     return predictions
 
@@ -532,16 +351,16 @@ class WSSceneGraph(model_base.ModelBase):
     predictions = {}
 
     # Ground-truth boxes can only be used for evaluation/visualization:
-    # - `scene_graph/subject/box`
-    # - `scene_graph/object/box`
-
+    # - Pop `scene_graph/subject/box`
+    # - Pop `scene_graph/object/box`
     if self.is_training:
       inputs.pop('scene_graph/subject/box')
       inputs.pop('scene_graph/object/box')
 
     # Extract proposal features.
     # - proposal_masks = [batch, max_n_proposal].
-    # - proposal_features = [batch, max_n_proposal, feature_dims].
+    # - proposals = [batch, max_n_proposal, 4].
+    # - proposal_hiddens = [batch, max_n_proposal, hidden_units].
     n_proposal = inputs['image/n_proposal']
     proposals = inputs['image/proposal']
     proposal_features = inputs['image/proposal/feature']
@@ -575,18 +394,15 @@ class WSSceneGraph(model_base.ModelBase):
     })
 
     # Multiple Relation Detection (MRD).
-    # - `score_relation_given_predicate`=[batch, max_n_proposal**2, n_predicate].
-    # - `logits_predicate_given_predicate`=shape=[batch, n_predicate, n_predicate].
-    (score_relation_given_predicate,
-     logits_predicate_given_predicate) = self._multiple_relation_detection(
-         n_proposal, proposals, proposal_hiddens)
+    # - `relation_logits`=[batch, max_n_proposal * max_n_proposal, n_predicate].
+    relation_logits = self._multiple_relation_detection(n_proposal, proposals,
+                                                        proposal_hiddens)
+    relation_logits = tf.reshape(
+        relation_logits,
+        [batch, max_n_proposal * max_n_proposal, self.n_predicate])
     predictions.update({
-        'pseudo/logits_predicate_given_predicate':
-            logits_predicate_given_predicate,
-        'refinement/iter_0/relation_scores':
-            score_relation_given_predicate,
-        'refinement/iter_0/relation_probas':
-            score_relation_given_predicate,
+        'refinement/relation_logits': relation_logits,
+        'refinement/relation_probas': tf.nn.sigmoid(relation_logits),
     })
 
     # Scene Graph Refinement (SGR).
@@ -611,11 +427,9 @@ class WSSceneGraph(model_base.ModelBase):
     max_n_triple = tf.shape(inputs['scene_graph/subject'])[1]
 
     # Max-Path-Sum solution.
-    it = 1
     graph_proposal_scores = predictions['refinement/iter_%i/proposal_probas' %
-                                        it]
-    graph_relation_scores = predictions['refinement/iter_%i/relation_probas' %
-                                        it]
+                                        self.options.n_refine_iteration]
+    graph_relation_scores = predictions['refinement/relation_probas']
 
     mps = GraphMPS(
         n_triple=n_triple,
@@ -632,15 +446,6 @@ class WSSceneGraph(model_base.ModelBase):
         proposal_to_proposal_weight=1.0,
         proposal_to_object_weight=1.0)
 
-    bs = GraphBS(n_proposal=n_proposal,
-                 proposals=proposals,
-                 proposal_scores=graph_proposal_scores,
-                 relation_scores=tf.reshape(
-                     graph_relation_scores,
-                     [batch, max_n_proposal, max_n_proposal, self.n_predicate]),
-                 iou_threshold=0.5,
-                 beam_size=50)
-
     predictions.update({
         'pseudo/subject/box':
             mps.get_subject_box(proposals),
@@ -652,28 +457,37 @@ class WSSceneGraph(model_base.ModelBase):
             mps.proposal_to_proposal_edge_weight,
         'pseudo/mps_path/proposal_to_object':
             mps.proposal_to_object_edge_weight,
-        'beam_search/subject':
-            self.id2entity(bs.subject_id),
-        'beam_search/subject/score':
-            bs.subject_score,
-        'beam_search/subject/box':
-            bs.get_subject_box(proposals),
-        'beam_search/object':
-            self.id2entity(bs.object_id),
-        'beam_search/object/score':
-            bs.object_score,
-        'beam_search/object/box':
-            bs.get_object_box(proposals),
-        'beam_search/predicate':
-            self.id2predicate(bs.predicate_id),
-        'beam_search/predicate/score':
-            bs.predicate_score,
     })
+
+    if not self.is_training:
+      bs = GraphNMS(
+          n_proposal=n_proposal,
+          proposals=proposals,
+          proposal_scores=graph_proposal_scores,
+          relation_scores=tf.reshape(
+              graph_relation_scores,
+              [batch, max_n_proposal, max_n_proposal, self.n_predicate]),
+          max_size_per_class=self.options.post_process.max_size_per_class,
+          max_total_size=self.options.post_process.max_total_size,
+          iou_thresh=self.options.post_process.iou_thresh,
+          score_thresh=self.options.post_process.score_thresh)
+
+      predictions.update({
+          'search/subject': self.id2entity(bs.subject_id),
+          'search/subject/score': bs.subject_score,
+          'search/subject/box': bs.get_subject_box(proposals),
+          'search/object': self.id2entity(bs.object_id),
+          'search/object/score': bs.object_score,
+          'search/object/box': bs.get_object_box(proposals),
+          'search/predicate': self.id2predicate(bs.predicate_id),
+          'search/predicate/score': bs.predicate_score,
+      })
+
     return predictions
 
-  def _compute_multiple_instance_detection_losses(
-      self, n_triple, subject_labels, subject_logits, object_labels,
-      object_logits, predicate_labels, predicate_logits):
+  def _compute_multiple_entity_detection_losses(self, n_triple, subject_labels,
+                                                subject_logits, object_labels,
+                                                object_logits):
     """Computes MED and MRD losses.
 
     Args:
@@ -682,14 +496,11 @@ class WSSceneGraph(model_base.ModelBase):
       subject_logits: A [batch, max_n_triple, n_entity] float tensor.
       object_labels: A [batch, max_n_triple] int tensor.
       object_logits: A [batch, max_n_triple, n_entity] float tensor.
-      predicate_labels: A [batch, max_n_triple] int tensor.
-      predicate_logits: A [batch, max_n_triple, n_predicate] float tensor.
 
     Returns:
       loss_dict involving the following fields:
         - `losses/med_subject_loss`: MED loss for subject.
         - `losses/med_object_loss`: MED loss for object.
-        - `losses/mrd_predicate_loss`: MRD loss for predicate.
     """
     max_n_triple = tf.shape(subject_labels)[1]
     triple_mask = tf.sequence_mask(n_triple,
@@ -700,7 +511,6 @@ class WSSceneGraph(model_base.ModelBase):
     for name, labels, logits in [
         ('losses/med_subject_loss', subject_labels, subject_logits),
         ('losses/med_object_loss', object_labels, object_logits),
-        ('losses/mrd_predicate_loss', predicate_labels, predicate_logits)
     ]:
       loss = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=labels,
                                                             logits=logits)
@@ -726,12 +536,19 @@ class WSSceneGraph(model_base.ModelBase):
                                       maxlen=max_n_proposal,
                                       dtype=tf.float32)
 
-    losses = tf.nn.sigmoid_cross_entropy_with_logits(labels=labels,
-                                                     logits=logits)
-    losses = masked_ops.masked_avg(losses,
-                                   tf.expand_dims(proposal_masks, -1),
-                                   dim=1)
-    loss = tf.reduce_mean(tf.reduce_mean(losses, -1))
+    if not self.options.refine_use_softmax:
+      losses = tf.nn.sigmoid_cross_entropy_with_logits(labels=labels,
+                                                       logits=logits)
+      losses = masked_ops.masked_avg(losses,
+                                     tf.expand_dims(proposal_masks, -1),
+                                     dim=1)
+      loss = tf.reduce_mean(losses)
+    else:
+      losses = tf.nn.softmax_cross_entropy_with_logits(labels=labels,
+                                                       logits=logits)
+      losses = masked_ops.masked_avg(losses, proposal_masks, dim=1)
+      loss = tf.reduce_mean(losses)
+
     return loss
 
   def _compute_relation_refinement_losses(self, n_proposal, max_n_proposal,
@@ -752,13 +569,21 @@ class WSSceneGraph(model_base.ModelBase):
     relation_masks = tf.multiply(tf.expand_dims(proposal_masks, 1),
                                  tf.expand_dims(proposal_masks, 2))
     relation_masks = tf.reshape(relation_masks,
-                                [batch, max_n_proposal * max_n_proposal, 1])
+                                [batch, max_n_proposal * max_n_proposal])
 
     # Losses.
-    losses = tf.nn.sigmoid_cross_entropy_with_logits(labels=labels,
-                                                     logits=logits)
-    losses = masked_ops.masked_avg(losses, relation_masks, dim=1)
-    loss = tf.reduce_mean(tf.reduce_mean(losses, -1))
+    if not self.options.refine_use_softmax:
+      losses = tf.nn.sigmoid_cross_entropy_with_logits(labels=labels,
+                                                       logits=logits)
+      losses = masked_ops.masked_avg(losses,
+                                     tf.expand_dims(relation_masks, -1),
+                                     dim=1)
+      loss = tf.reduce_mean(losses)
+    else:
+      losses = tf.nn.softmax_cross_entropy_with_logits(labels=labels,
+                                                       logits=logits)
+      losses = masked_ops.masked_avg(losses, relation_masks, dim=1)
+      loss = tf.reduce_mean(losses)
     return loss
 
   def _compute_pseudo_instance_labels(self,
@@ -800,7 +625,7 @@ class WSSceneGraph(model_base.ModelBase):
               iou_threshold=iou_threshold_to_propogate))
 
     instance_labels = utils.post_process_pseudo_detection_labels(
-        tf.add_n(instance_labels))
+        tf.add_n(instance_labels), normalize=self.options.refine_use_softmax)
     return instance_labels
 
   def _compute_pseudo_relation_labels(self,
@@ -838,7 +663,7 @@ class WSSceneGraph(model_base.ModelBase):
         relation_labels,
         [batch, max_n_proposal * max_n_proposal, 1 + n_predicate])
     relation_labels_reshaped = utils.post_process_pseudo_detection_labels(
-        relation_labels_reshaped)
+        relation_labels_reshaped, normalize=self.options.refine_use_softmax)
     return relation_labels_reshaped
 
   def _create_selection_indices(self, subject_ids, object_ids, predicate_ids):
@@ -899,24 +724,20 @@ class WSSceneGraph(model_base.ModelBase):
         predictions['pseudo/logits_entity_given_entity'], subject_index)
     object_logits = tf.gather_nd(
         predictions['pseudo/logits_entity_given_entity'], object_index)
-    predicate_logits = tf.gather_nd(
-        predictions['pseudo/logits_predicate_given_predicate'], predicate_index)
 
     loss_dict.update(
-        self._compute_multiple_instance_detection_losses(
+        self._compute_multiple_entity_detection_losses(
             n_triple=n_triple,
             subject_labels=subject_ids,
             subject_logits=subject_logits,
             object_labels=object_ids,
-            object_logits=object_logits,
-            predicate_labels=predicate_ids,
-            predicate_logits=predicate_logits))
+            object_logits=object_logits))
 
     # SGR losses.
     # - `proposal_scores_0`=[batch, max_n_proposal, n_entity].
     # - `relation_scores_0`=[batch, max_n_proposal**2, n_predicate].
     proposal_scores_0 = predictions['refinement/iter_0/proposal_probas']
-    relation_scores_0 = predictions['refinement/iter_0/relation_probas']
+    relation_scores_0 = predictions['refinement/relation_probas']
 
     proposal_to_proposal_weight = 1.0
     for i in range(1, 1 + self.options.n_refine_iteration):
@@ -949,7 +770,8 @@ class WSSceneGraph(model_base.ModelBase):
           predicate_index=predicate_ids,
           subject_proposal_index=mps.subject_proposal_index,
           object_proposal_index=mps.object_proposal_index,
-          iou_threshold_to_propogate=self.options.iou_threshold_to_propogate)
+          iou_threshold_to_propogate=self.options.
+          iou_threshold_to_propogate_relation)
 
       sgr_proposal_loss = self._compute_proposal_refinement_losses(
           n_proposal=n_proposal,
@@ -958,8 +780,8 @@ class WSSceneGraph(model_base.ModelBase):
       sgr_relation_loss = self._compute_relation_refinement_losses(
           n_proposal=n_proposal,
           max_n_proposal=max_n_proposal,
-          labels=pseudo_relation_labels,
-          logits=predictions['refinement/iter_%i/relation_scores' % i])
+          labels=pseudo_relation_labels[:, :, 1:],
+          logits=predictions['refinement/relation_logits'])
       loss_dict.update({
           'losses/sgr_proposal_loss_%i' % i:
               self.options.refine_loss_weight * sgr_proposal_loss,
@@ -968,7 +790,6 @@ class WSSceneGraph(model_base.ModelBase):
       })
 
       proposal_scores_0 = predictions['refinement/iter_%i/proposal_probas' % i]
-      relation_scores_0 = predictions['refinement/iter_%i/relation_probas' % i]
 
     return loss_dict
 
@@ -1015,13 +836,10 @@ class WSSceneGraph(model_base.ModelBase):
         predictions['pseudo/logits_entity_given_entity'], subject_index)
     object_logits = tf.gather_nd(
         predictions['pseudo/logits_entity_given_entity'], object_index)
-    predicate_logits = tf.gather_nd(
-        predictions['pseudo/logits_predicate_given_predicate'], predicate_index)
 
     for name, labels, logits in [
         ('metrics/predict_subject', subject_ids, subject_logits),
         ('metrics/predict_object', object_ids, object_logits),
-        ('metrics/predict_predicate', predicate_ids, predicate_logits)
     ]:
       bingo = tf.equal(tf.cast(tf.argmax(logits, -1), tf.int32), labels)
       accuracy_metric = tf.keras.metrics.Mean()
@@ -1033,8 +851,7 @@ class WSSceneGraph(model_base.ModelBase):
     for i in range(0, 1 + self.options.n_refine_iteration):
       graph_proposal_scores = predictions['refinement/iter_%i/proposal_probas' %
                                           i]
-      graph_relation_scores = predictions['refinement/iter_%i/relation_probas' %
-                                          i]
+      graph_relation_scores = predictions['refinement/relation_probas']
       mps = GraphMPS(
           n_triple=n_triple,
           n_proposal=n_proposal,
@@ -1074,35 +891,35 @@ class WSSceneGraph(model_base.ModelBase):
         mean_metric.update_state(mean_value)
         metric_dict[name] = mean_metric
 
-    # # Compute detection recall.
-    # input_data_fields = standard_fields.InputDataFields
-    # detection_fields = standard_fields.DetectionResultFields
+    eval_dict = {
+        'image_id':
+            inputs['id'],
+        'groundtruth/n_triple':
+            inputs['scene_graph/n_triple'],
+        'groundtruth/subject':
+            inputs['scene_graph/subject'],
+        'groundtruth/subject/box':
+            inputs['scene_graph/subject/box'],
+        'groundtruth/object':
+            inputs['scene_graph/object'],
+        'groundtruth/object/box':
+            inputs['scene_graph/object/box'],
+        'groundtruth/predicate':
+            inputs['scene_graph/predicate'],
+        'prediction/n_triple': [self.options.post_process.max_total_size] *
+                               batch,
+        'prediction/subject':
+            predictions['search/subject'],
+        'prediction/subject/box':
+            predictions['search/subject/box'],
+        'prediction/object':
+            predictions['search/object'],
+        'prediction/object/box':
+            predictions['search/object/box'],
+        'prediction/predicate':
+            predictions['search/predicate'],
+    }
 
-    # for i in range(1, 1 + self.options.n_refine_iteration):
-    #   num_detection = predictions['refinement/iter_%i/num_detection' % i]
-    #   detection_boxes = predictions['refinement/iter_%i/detection_boxes' % i]
-    #   detection_scores = predictions['refinement/iter_%i/detection_scores' % i]
-    #   detection_classes = predictions['refinement/iter_%i/detection_class_ids' %
-    #                                   i]
-
-    #   for (name, gt_box,
-    #        gt_label) in [('metrics@%i/refinement/recall@100/subject' % i,
-    #                       gt_subject_box, subject_ids),
-    #                      ('metrics@%i/refinement/recall@100/object' % i,
-    #                       gt_object_box, object_ids)]:
-
-    #     evaluator = coco_evaluation.CocoDetectionEvaluator(self.categories)
-    #     eval_dict = {
-    #         input_data_fields.key: inputs['id'],
-    #         'num_groundtruth_boxes_per_image': n_triple,
-    #         input_data_fields.groundtruth_boxes: gt_box,
-    #         input_data_fields.groundtruth_classes: 1 + gt_label,
-    #         'num_det_boxes_per_image': num_detection,
-    #         detection_fields.detection_boxes: detection_boxes,
-    #         detection_fields.detection_scores: detection_scores,
-    #         detection_fields.detection_classes: 1 + detection_classes,
-    #     }
-    #     eval_ops = evaluator.get_estimator_eval_metric_ops(eval_dict)
-    #     metric_dict[name] = eval_ops['DetectionBoxes_Recall/AR@100']
-
+    evaluator = SceneGraphEvaluator(iou_threshold=0.3)
+    metric_dict.update(evaluator.get_estimator_eval_metric_ops(eval_dict))
     return metric_dict

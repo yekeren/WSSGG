@@ -108,13 +108,18 @@ class SceneGraphEvaluator(object):
     total_recall50 = 0
     total_recall100 = 0
 
-    for image_id, image_info in self._image_annotations.items():
+    for image_index, (image_id,
+                      image_info) in enumerate(self._image_annotations.items()):
       n_triples, recall50, recall100 = self._evaluate(image_id,
                                                       image_info['groundtruth'],
                                                       image_info['prediction'])
       total_n_triple += n_triples
       total_recall50 += recall50
       total_recall100 += recall100
+
+      if (image_index + 1) % 100 == 0:
+        logging.info('Evaluate on %i/%i.', image_index + 1,
+                     len(self._image_annotations))
 
     return {
         'metrics/scene_graph_triplets/recall@50':

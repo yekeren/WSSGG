@@ -241,7 +241,7 @@ def scatter_pseudo_relation_detection_labels(n_predicate,
   return pseudo_labels
 
 
-def post_process_pseudo_detection_labels(pseudo_labels):
+def post_process_pseudo_detection_labels(pseudo_labels, normalize=False):
   """Noarmalizes pseudo entity detection labels.
 
   Args:
@@ -262,17 +262,21 @@ def post_process_pseudo_detection_labels(pseudo_labels):
       tf.fill([batch, max_n_proposal, n_classes], 0.0)
   ], -1)
   pseudo_labels = tf.add(pseudo_labels, background)
-  pseudo_labels = tf.cast(pseudo_labels > 0, tf.float32)
+  if normalize:
+    sumv = tf.reduce_sum(pseudo_labels, -1, keep_dims=True)
+    pseudo_labels = tf.math.divide(pseudo_labels, sumv)
+  else:
+    pseudo_labels = tf.cast(pseudo_labels > 0, tf.float32)
   return pseudo_labels
 
 
 def nms_post_process(n_proposal,
                      proposals,
                      proposal_scores,
-                     max_output_size_per_class=10,
-                     max_total_size=20,
-                     iou_threshold=0.5,
-                     score_threshold=0.001):
+                     max_size_per_class=10,
+                     max_total_size=300,
+                     iou_thresh=0.5,
+                     score_thresh=0.001):
   """Non-max-suppression process.
 
   Args:
@@ -291,19 +295,31 @@ def nms_post_process(n_proposal,
       the scores of the boxes.
     detection_classes: A [batch_size, max_detections] float32 tensor
       containing the class for boxes.
+    selected_indices: A [batch_size, max_detections] int tensor.
   """
-  proposals = tf.expand_dims(proposals, axis=2)
+  batch = proposals.shape[0]
+  max_n_proposal = tf.shape(proposals)[1]
 
-  (detection_boxes, detection_scores, detection_classes,
-   num_detections) = tf.image.combined_non_max_suppression(
+  proposal_indices = tf.expand_dims(tf.range(max_n_proposal, dtype=tf.int32), 0)
+  proposal_indices = tf.broadcast_to(proposal_indices, [batch, max_n_proposal])
+
+  proposals = tf.expand_dims(proposals, axis=2)
+  (detection_boxes, detection_scores, detection_classes, _, additional_fields,
+   num_detections) = batch_multiclass_non_max_suppression(
        boxes=proposals,
        scores=proposal_scores,
-       max_output_size_per_class=max_output_size_per_class,
+       num_valid_boxes=n_proposal,
+       additional_fields={'proposal_indices': proposal_indices},
+       max_size_per_class=max_size_per_class,
        max_total_size=max_total_size,
-       iou_threshold=iou_threshold,
-       score_threshold=score_threshold)
+       iou_thresh=iou_thresh,
+       score_thresh=score_thresh,
+       parallel_iterations=32)
   detection_classes = tf.cast(detection_classes, tf.int32)
-  return num_detections, detection_boxes, detection_scores, detection_classes
+  selected_indices = additional_fields['proposal_indices']
+
+  return (num_detections, detection_boxes, detection_scores, detection_classes,
+          selected_indices)
 
 
 def compute_sigmoid_focal_loss(labels, logits, gamma=2.0, alpha=0.25):
