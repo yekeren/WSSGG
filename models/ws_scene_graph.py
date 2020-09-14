@@ -158,8 +158,8 @@ class WSSceneGraph(model_base.ModelBase):
                                       maxlen=max_n_proposal,
                                       dtype=tf.float32)
 
-    weights_initializer = tf.compat.v1.constant_initializer(
-        self.predicate_emb_weights.transpose())
+    # weights_initializer = tf.compat.v1.constant_initializer(
+    #     self.predicate_emb_weights.transpose())
 
     # Predict the predicate given the subject/object.
     # - logits_predicate_given_subject = [batch, max_n_proposal, n_predicate].
@@ -169,15 +169,15 @@ class WSSceneGraph(model_base.ModelBase):
           proposal_features,
           num_outputs=self.n_predicate,
           activation_fn=None,
-          weights_initializer=weights_initializer,
-          biases_initializer=None,
+          # weights_initializer=weights_initializer,
+          # biases_initializer=None,
           scope='MRD/predicate_given_subject')
       logits_predicate_given_object = slim.fully_connected(
           proposal_features,
           num_outputs=self.n_predicate,
           activation_fn=None,
-          weights_initializer=weights_initializer,
-          biases_initializer=None,
+          # weights_initializer=weights_initializer,
+          # biases_initializer=None,
           scope='MRD/predicate_given_object')
 
     # Aggregate the relation score.
@@ -219,8 +219,8 @@ class WSSceneGraph(model_base.ModelBase):
                                       maxlen=max_n_proposal,
                                       dtype=tf.float32)
 
-    weights_initializer = tf.compat.v1.constant_initializer(
-        self.entity_emb_weights.transpose())
+    # weights_initializer = tf.compat.v1.constant_initializer(
+    #     self.entity_emb_weights.transpose())
 
     # Two branches.
     with slim.arg_scope(self.arg_scope_fn()):
@@ -228,15 +228,15 @@ class WSSceneGraph(model_base.ModelBase):
           proposal_features,
           num_outputs=self.n_entity,
           activation_fn=None,
-          weights_initializer=weights_initializer,
-          biases_initializer=None,
+          # weights_initializer=weights_initializer,
+          # biases_initializer=None,
           scope="MED/branch/detection")
       logits_entity_given_proposal = slim.fully_connected(
           proposal_features,
           num_outputs=self.n_entity,
           activation_fn=None,
-          weights_initializer=weights_initializer,
-          biases_initializer=None,
+          # weights_initializer=weights_initializer,
+          # biases_initializer=None,
           scope="MED/branch/classification")
 
     attn_proposal_given_entity = masked_ops.masked_softmax(
@@ -273,14 +273,14 @@ class WSSceneGraph(model_base.ModelBase):
         [np.zeros((1, dims)), self.entity_emb_weights], axis=0)
 
     with slim.arg_scope(self.arg_scope_fn()):
-      weights_initializer = tf.compat.v1.constant_initializer(
-          entity_emb_weights.transpose())
+      # weights_initializer = tf.compat.v1.constant_initializer(
+      #     entity_emb_weights.transpose())
       logits_entity_given_proposal = slim.fully_connected(
           proposal_features,
           num_outputs=1 + self.n_entity,
           activation_fn=None,
-          weights_initializer=weights_initializer,
-          biases_initializer=None,
+          # weights_initializer=weights_initializer,
+          # biases_initializer=None,
           scope=scope)
     return logits_entity_given_proposal
 
