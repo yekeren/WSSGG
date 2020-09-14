@@ -17,6 +17,7 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+import numpy as np
 import tensorflow as tf
 
 from modeling.utils import box_ops
@@ -118,6 +119,42 @@ class BoxOpsTest(tf.test.TestCase):
                                  [0.0, 0.0, 2.0, 3.0], [1.0, 1.0, 1.0, 1.0],
                                  [2.0, 2.0, 1.0, 1.0]]),
         [-0.5, -0.5, 0.5, -0.5, -1.0])
+
+  def test_py_area(self):
+    self.assertAllClose(
+        box_ops.py_area(
+            np.array([[0.0, 0.0, 1.0, 1.0], [0.0, 0.0, 0.5, 1.0],
+                      [0.0, 0.0, 0.5, 0.5], [0.0, 0.0, -1.0, -1.0],
+                      [0.0, 0.0, 0.0, 0.0]])), [1.0, 0.5, 0.25, 0.0, 0.0])
+
+  def test_py_intersect(self):
+    self.assertAllClose(
+        box_ops.py_intersect(box1=np.array([[0.0, 0.0, 2.0, 2.0],
+                                            [0.0, 0.0, 2.0, 3.0],
+                                            [0.0, 0.0, 3.0, 2.0],
+                                            [0.0, 0.0, 1.0, 1.0],
+                                            [0.0, 0.0, 1.0, 1.0]]),
+                             box2=np.array([[1.0, 1.0, 2.0, 2.0],
+                                            [1.0, 1.0, 2.0, 2.0],
+                                            [1.0, 1.0, 2.0, 2.0],
+                                            [1.0, 1.0, 1.0, 1.0],
+                                            [2.0, 2.0, 1.0, 1.0]])),
+        [[1.0, 1.0, 2.0, 2.0], [1.0, 1.0, 2.0, 2.0], [1.0, 1.0, 2.0, 2.0],
+         [1.0, 1.0, 1.0, 1.0], [2.0, 2.0, 1.0, 1.0]])
+
+  def test_py_iou(self):
+    self.assertAllClose(
+        box_ops.py_iou(box1=np.array([[0.0, 0.0, 2.0,
+                                       2.0], [0.0, 0.0, 2.0, 3.0],
+                                      [1.0, 1.0, 2.0,
+                                       2.0], [0.0, 0.0, 1.0, 1.0],
+                                      [0.0, 0.0, 1.0, 1.0]]),
+                       box2=np.array([[1.0, 1.0, 2.0,
+                                       2.0], [1.0, 1.0, 2.0, 2.0],
+                                      [0.0, 0.0, 2.0,
+                                       3.0], [1.0, 1.0, 1.0, 1.0],
+                                      [2.0, 2.0, 1.0, 1.0]])),
+        [0.25, 1.0 / 6, 1.0 / 6, 0.0, 0.0])
 
 
 if __name__ == '__main__':

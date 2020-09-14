@@ -18,6 +18,7 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+import numpy as np
 import tensorflow as tf
 
 _EPSILON = 1e-10
@@ -176,3 +177,58 @@ def y_distance(box1, box2):
   y1 = tf.unstack(center(box1), axis=-1)[0]
   y2 = tf.unstack(center(box2), axis=-1)[0]
   return y1 - y2
+
+
+def py_area(box):
+  """Computes the box area.
+
+  Args:
+    box: A [i1,...,iN, 4] float array.
+
+  Returns:
+    area: Box areas, a [batch] float tensor.
+  """
+  ymin, xmin, ymax, xmax = [
+      np.squeeze(x, -1) for x in np.split(box, [1, 2, 3], axis=-1)
+  ]
+  return np.maximum(ymax - ymin, 0.0) * np.maximum(xmax - xmin, 0.0)
+
+
+def py_intersect(box1, box2):
+  """Computes the intersect box. 
+
+  Args:
+    box1: A [i1,...,iN, 4] float tensor.
+    box2: A [i1,...,iN, 4] float tensor.
+
+  Returns:
+    A [i1,...,iN, 4] float tensor.
+  """
+  ymin1, xmin1, ymax1, xmax1 = [
+      np.squeeze(x, -1) for x in np.split(box1, [1, 2, 3], axis=-1)
+  ]
+  ymin2, xmin2, ymax2, xmax2 = [
+      np.squeeze(x, -1) for x in np.split(box2, [1, 2, 3], axis=-1)
+  ]
+
+  ymin = np.maximum(ymin1, ymin2)
+  xmin = np.maximum(xmin1, xmin2)
+  ymax = np.minimum(ymax1, ymax2)
+  xmax = np.minimum(xmax1, xmax2)
+
+  return np.stack([ymin, xmin, ymax, xmax], axis=-1)
+
+
+def py_iou(box1, box2):
+  """Computes the IoU between box1 and box2.
+
+  Args:
+    box1: A [i1,...,iN, 4] float tensor.
+    box2: A [i1,...,iN, 4] float tensor.
+
+  Returns:
+    iou: A [i1,...,iN] float tensor.
+  """
+  area_intersect = py_area(py_intersect(box1, box2))
+  area_union = py_area(box1) + py_area(box2) - area_intersect
+  return np.divide(area_intersect, np.maximum(area_union, _EPSILON))
