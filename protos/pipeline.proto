@@ -12,14 +12,17 @@ message Pipeline {
   // Eval reader.
   optional Reader eval_reader = 2;
 
+  // Test reader.
+  optional Reader test_reader = 3;
+
   // Model config.
-  optional Model model = 3;
+  optional Model model = 4;
 
   // Train config.
-  optional TrainConfig train_config = 4;
+  optional TrainConfig train_config = 5;
 
   // Eval config
-  optional EvalConfig eval_config = 5;
+  optional EvalConfig eval_config = 6;
 }
 
 message EvalConfig {

@@ -147,6 +147,43 @@ class GraphMPS(object):
     """
     return self._gather_proposal_by_index(proposals, self.object_proposal_index)
 
+  def get_subject_feature(self, proposal_features):
+    """Returns the subject feature.
+
+    Args:
+      proposal_features: A [batch, max_n_proposal, dims] float tensor.
+
+    Returns:
+      A [batch, max_n_triple, dims] float tensor.
+    """
+    return self._gather_proposal_by_index(proposal_features,
+                                          self.subject_proposal_index)
+
+  def get_object_feature(self, proposal_features):
+    """Returns the object feature.
+
+    Args:
+      proposal_features: A [batch, max_n_proposal, dims] float tensor.
+
+    Returns:
+      A [batch, max_n_triple, dims] float tensor.
+    """
+    return self._gather_proposal_by_index(proposal_features,
+                                          self.object_proposal_index)
+
+  def get_predicate_feature(self, relation_features):
+    """Returns the predicate feature.
+
+    Args:
+      relation_features: A [batch, max_n_proposal, max_n_proposal, dims] float tensor.
+
+    Returns:
+      A [batch, max_n_triple, dims] float tensor.
+    """
+    return self._gather_relation_by_index(relation_features,
+                                          self.subject_proposal_index,
+                                          self.object_proposal_index)
+
   @staticmethod
   def compute_max_path_sum(n_proposal, n_triple, subject_to_proposal,
                            proposal_to_proposal, proposal_to_object):
@@ -310,3 +347,33 @@ class GraphMPS(object):
                                    [batch, max_n_triple])
     index = tf.stack([batch_index, triple_index, proposal_index], -1)
     return tf.gather_nd(proposals, index)
+
+  def _gather_relation_by_index(self, relations, subject_index, object_index):
+    """Gathers relation by index.
+
+      This is a helper function to extract max-path-sum solution.
+
+    Args:
+      relations: A [batch, max_n_proposal, max_n_proposal, dims] float tensor.
+      subject_index: A [batch, max_n_triple] int tensor.
+      object_index: A [batch, max_n_triple] int tensor.
+
+    Returns:
+      A [batch, max_n_triple, dims] float tensor, the relation embedding vector.
+    """
+    batch = relations.shape[0].value
+    dims = relations.shape[-1].value
+    max_n_triple = tf.shape(subject_index)[1]
+    max_n_proposal = tf.shape(relations)[1]
+
+    relations = tf.broadcast_to(
+        tf.expand_dims(relations, 1),
+        [batch, max_n_triple, max_n_proposal, max_n_proposal, dims])
+
+    batch_index = tf.broadcast_to(tf.expand_dims(tf.range(batch), 1),
+                                  [batch, max_n_triple])
+    triple_index = tf.broadcast_to(tf.expand_dims(tf.range(max_n_triple), 0),
+                                   [batch, max_n_triple])
+    index = tf.stack([batch_index, triple_index, subject_index, object_index],
+                     -1)
+    return tf.gather_nd(relations, index)

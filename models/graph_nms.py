@@ -39,7 +39,8 @@ class GraphNMS(object):
                max_size_per_class=2,
                max_total_size=100,
                iou_thresh=0.5,
-               score_thresh=0.01):
+               score_thresh=0.01,
+               use_class_agnostic_nms=False):
     """Initializes the object.
 
     Args:
@@ -58,6 +59,7 @@ class GraphNMS(object):
          max_size_per_class=max_size_per_class,
          max_total_size=max_total_size,
          iou_thresh=iou_thresh,
+         use_class_agnostic_nms=use_class_agnostic_nms,
          score_thresh=score_thresh)
     self.detection_indices = detection_indices
 
@@ -177,7 +179,8 @@ class GraphNMS(object):
                               parallel_iterations=32,
                               back_prop=False)
     batch = n_proposal.shape[0].value
-    for i in range(len(batch_outputs)):
+    batch_outputs[0].set_shape([batch])
+    for i in range(1, len(batch_outputs)):
       batch_outputs[i].set_shape([batch, max_total_size])
 
     (self._n_triple, self._triple_score, self._subject_score,
@@ -297,6 +300,30 @@ class GraphNMS(object):
       A [batch, max_total_size, 4] float tensor.
     """
     return self._gather_proposal_by_index(proposals, self.object_proposal_index)
+
+  def get_subject_feature(self, proposal_features):
+    """Returns the subject feature.
+
+    Args:
+      proposal_features: A [batch, max_n_proposal, dims] float tensor.
+
+    Returns:
+      A [batch, max_n_triple, dims] float tensor.
+    """
+    return self._gather_proposal_by_index(proposal_features,
+                                          self.subject_proposal_index)
+
+  def get_object_feature(self, proposal_features):
+    """Returns the object feature.
+
+    Args:
+      proposal_features: A [batch, max_n_proposal, dims] float tensor.
+
+    Returns:
+      A [batch, max_n_triple, dims] float tensor.
+    """
+    return self._gather_proposal_by_index(proposal_features,
+                                          self.object_proposal_index)
 
   def _gather_proposal_by_index(self, proposals, proposal_index):
     """Gathers proposal box or proposal features by index..
