@@ -47,7 +47,7 @@ class GraphNMS(object):
       proposals: A [batch, max_n_proposal, 4] float tensor.
       proposal_scores: A [batch, max_n_proposal, n_entity] float tensor.
       relation_scores: A [batch, max_n_proposal, max_n_proposal, n_predicate] float tensor.
-      beam_size: Beam size for the searching.
+      max_total_size: Beam size for the searching.
       parallel_iterations: Number of batch items to process in parallel.
     """
     (num_detections, detection_boxes, detection_scores, detection_classes,
@@ -78,6 +78,11 @@ class GraphNMS(object):
       detection_scores = detection_scores[:num_detections]
       n_predicate = relation_scores.shape[-1]
 
+      relation_kth_indices = np.argpartition(-relation_scores,
+                                             max_size_per_class,
+                                             axis=-1)
+      relation_kth_indices = relation_kth_indices[:, :, :max_size_per_class]
+
       h = []
       for subject_proposal_index, subject_entity_index, subject_score in zip(
           detection_indices, detection_classes, detection_scores):
@@ -87,7 +92,10 @@ class GraphNMS(object):
           if subject_proposal_index == object_proposal_index:
             continue
 
-          for predicate_index in range(n_predicate):
+          #for predicate_index in range(n_predicate):
+          for predicate_index in relation_kth_indices[subject_proposal_index,
+                                                      object_proposal_index]:
+
             predicate_score = relation_scores[subject_proposal_index,
                                               object_proposal_index,
                                               predicate_index]
@@ -106,11 +114,38 @@ class GraphNMS(object):
 
       # Stack results.
       values = [heapq.heappop(h) for i in range(len(h))][::-1]
-      (hscore, subject_score, subject_proposal_index, subject_entity_index,
-       predicate_score, predicate_index, object_score, object_proposal_index,
-       object_entity_index) = zip(*values)
+
+      if values:
+        (hscore, subject_score, subject_proposal_index, subject_entity_index,
+         predicate_score, predicate_index, object_score, object_proposal_index,
+         object_entity_index) = zip(*values)
+
+        # Padding.
+        if len(values) < max_total_size:
+          n_pad = max_total_size - len(values)
+          hscore = list(hscore) + [0] * n_pad
+          subject_score = list(subject_score) + [0] * n_pad
+          subject_proposal_index = list(subject_proposal_index) + [0] * n_pad
+          subject_entity_index = list(subject_entity_index) + [0] * n_pad
+          predicate_score = list(predicate_score) + [0] * n_pad
+          predicate_index = list(predicate_index) + [0] * n_pad
+          object_score = list(object_score) + [0] * n_pad
+          object_proposal_index = list(object_proposal_index) + [0] * n_pad
+          object_entity_index = list(object_entity_index) + [0] * n_pad
+
+      else:
+        hscore = np.zeros((max_total_size), np.float32)
+        subject_score = np.zeros((max_total_size), np.float32)
+        subject_proposal_index = np.zeros((max_total_size), np.int32)
+        subject_entity_index = np.zeros((max_total_size), np.int32)
+        predicate_score = np.zeros((max_total_size), np.float32)
+        predicate_index = np.zeros((max_total_size), np.int32)
+        object_score = np.zeros((max_total_size), np.float32)
+        object_proposal_index = np.zeros((max_total_size), np.int32)
+        object_entity_index = np.zeros((max_total_size), np.int32)
 
       return [
+          np.array(len(values), np.int32),
           np.array(hscore, np.float32),
           np.array(subject_score, np.float32),
           np.array(subject_proposal_index, np.int32),
@@ -124,8 +159,8 @@ class GraphNMS(object):
 
     def _per_image_relation_search(elems):
       return tf.py_func(_py_per_image_relation_search, elems, [
-          tf.float32, tf.float32, tf.int32, tf.int32, tf.float32, tf.int32,
-          tf.float32, tf.int32, tf.int32
+          tf.int32, tf.float32, tf.float32, tf.int32, tf.int32, tf.float32,
+          tf.int32, tf.float32, tf.int32, tf.int32
       ])
 
     batch_outputs = tf.map_fn(_per_image_relation_search,
@@ -135,26 +170,36 @@ class GraphNMS(object):
                                   relation_scores
                               ],
                               dtype=[
-                                  tf.float32, tf.float32, tf.int32, tf.int32,
-                                  tf.float32, tf.int32, tf.float32, tf.int32,
-                                  tf.int32
+                                  tf.int32, tf.float32, tf.float32, tf.int32,
+                                  tf.int32, tf.float32, tf.int32, tf.float32,
+                                  tf.int32, tf.int32
                               ],
+                              parallel_iterations=32,
                               back_prop=False)
     batch = n_proposal.shape[0].value
     for i in range(len(batch_outputs)):
       batch_outputs[i].set_shape([batch, max_total_size])
 
-    (self._triple_score, self._subject_score, self._subject_proposal_index,
-     self._subject_entity_index, self._predicate_score, self._predicate_index,
-     self._object_score, self._object_proposal_index,
-     self._object_entity_index) = batch_outputs
+    (self._n_triple, self._triple_score, self._subject_score,
+     self._subject_proposal_index, self._subject_entity_index,
+     self._predicate_score, self._predicate_index, self._object_score,
+     self._object_proposal_index, self._object_entity_index) = batch_outputs
+
+  @property
+  def n_triple(self):
+    """Returns number of triples.
+
+    Returns:
+      A [batch] int tensor, the number of detected triples.
+    """
+    return self._n_triple
 
   @property
   def triple_score(self):
     """Returns triplet score.
 
     Returns:
-      A [batch, beam_size] float tensor, each value denotes a score.
+      A [batch, max_total_size] float tensor, each value denotes a score.
     """
     return self._triple_score
 
@@ -163,7 +208,7 @@ class GraphNMS(object):
     """Returns triplet score.
 
     Returns:
-      A [batch, beam_size] float tensor, each value denotes a score.
+      A [batch, max_total_size] float tensor, each value denotes a score.
     """
     return self._subject_score
 
@@ -172,7 +217,7 @@ class GraphNMS(object):
     """Returns triplet score.
 
     Returns:
-      A [batch, beam_size] float tensor, each value denotes a score.
+      A [batch, max_total_size] float tensor, each value denotes a score.
     """
     return self._object_score
 
@@ -181,7 +226,7 @@ class GraphNMS(object):
     """Returns triplet score.
 
     Returns:
-      A [batch, beam_size] float tensor, each value denotes a score.
+      A [batch, max_total_size] float tensor, each value denotes a score.
     """
     return self._predicate_score
 
@@ -190,7 +235,7 @@ class GraphNMS(object):
     """Returns subject proposal index.
     
     Returns:
-      A [batch, beam_size] int tensor, each value denotes a proposal index.
+      A [batch, max_total_size] int tensor, each value denotes a proposal index.
     """
     return self._subject_proposal_index
 
@@ -199,7 +244,7 @@ class GraphNMS(object):
     """Returns object proposal index.
     
     Returns:
-      A [batch, beam_size] int tensor, each value denotes a proposal index.
+      A [batch, max_total_size] int tensor, each value denotes a proposal index.
     """
     return self._object_proposal_index
 
@@ -208,7 +253,7 @@ class GraphNMS(object):
     """Returns subject id.
     
     Returns:
-      A [batch, beam_size] int tensor, each value denotes a entity index.
+      A [batch, max_total_size] int tensor, each value denotes a entity index.
     """
     return self._subject_entity_index
 
@@ -217,7 +262,7 @@ class GraphNMS(object):
     """Returns object id.
     
     Returns:
-      A [batch, beam_size] int tensor, each value denotes a entity index.
+      A [batch, max_total_size] int tensor, each value denotes a entity index.
     """
     return self._object_entity_index
 
@@ -226,7 +271,7 @@ class GraphNMS(object):
     """Returns predicate id.
     
     Returns:
-      A [batch, beam_size] int tensor, each value denotes a predicate index.
+      A [batch, max_total_size] int tensor, each value denotes a predicate index.
     """
     return self._predicate_index
 
@@ -237,7 +282,7 @@ class GraphNMS(object):
       proposals: A [batch, max_n_proposal, 4] float tensor.
 
     Returns:
-      A [batch, beam_size, 4] float tensor.
+      A [batch, max_total_size, 4] float tensor.
     """
     return self._gather_proposal_by_index(proposals,
                                           self.subject_proposal_index)
@@ -249,7 +294,7 @@ class GraphNMS(object):
       proposals: A [batch, max_n_proposal, 4] float tensor.
 
     Returns:
-      A [batch, beam_size, 4] float tensor.
+      A [batch, max_total_size, 4] float tensor.
     """
     return self._gather_proposal_by_index(proposals, self.object_proposal_index)
 
@@ -261,24 +306,24 @@ class GraphNMS(object):
     Args:
       proposals: A [batch, max_n_proposal, dims] float tensor.
         It could be either proposal box (dims=4) or proposal features.
-      proposal_index: A [batch, beam_size] int tensor.
+      proposal_index: A [batch, max_total_size] int tensor.
   
     Returns:
-      A [batch, beam_size, dims] float tensor, the gathered proposal info,
+      A [batch, max_total_size, dims] float tensor, the gathered proposal info,
         could be proposal boxes or proposal features.
     """
     batch = proposals.shape[0].value
     dims = proposals.shape[-1].value
-    beam_size = proposal_index.shape[1].value
+    max_total_size = proposal_index.shape[1].value
     max_n_proposal = tf.shape(proposals)[1]
 
     proposals = tf.broadcast_to(tf.expand_dims(proposals, 1),
-                                [batch, beam_size, max_n_proposal, dims])
+                                [batch, max_total_size, max_n_proposal, dims])
 
     batch_index = tf.broadcast_to(tf.expand_dims(tf.range(batch), 1),
-                                  [batch, beam_size])
-    beam_index = tf.broadcast_to(tf.expand_dims(tf.range(beam_size), 0),
-                                 [batch, beam_size])
+                                  [batch, max_total_size])
+    beam_index = tf.broadcast_to(tf.expand_dims(tf.range(max_total_size), 0),
+                                 [batch, max_total_size])
     index = tf.stack([batch_index, beam_index, proposal_index], -1)
     return tf.gather_nd(proposals, index)
 
