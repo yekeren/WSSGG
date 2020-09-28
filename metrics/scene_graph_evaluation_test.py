@@ -46,11 +46,11 @@ class SceneGraphEvaluatorTest(tf.test.TestCase):
         })
 
     metrics = evaluator.evaluate()
-    self.assertEqual(metrics['metrics/scene_graph_triplets/n_example'], 1)
-    self.assertAlmostEqual(metrics['metrics/scene_graph_triplets/recall@50'],
-                           0.5)
-    self.assertAlmostEqual(metrics['metrics/scene_graph_triplets/recall@100'],
-                           0.5)
+    self.assertEqual(metrics['scene_graph_n_example'], 1)
+    self.assertAlmostEqual(metrics['scene_graph_recall@50'], 0.5)
+    self.assertAlmostEqual(metrics['scene_graph_recall@100'], 0.5)
+    self.assertAlmostEqual(metrics['scene_graph_per_image_recall@50'], 0.5)
+    self.assertAlmostEqual(metrics['scene_graph_per_image_recall@100'], 0.5)
 
   def test_evaluate_single_example2(self):
     evaluator = SceneGraphEvaluator()
@@ -74,11 +74,11 @@ class SceneGraphEvaluatorTest(tf.test.TestCase):
         })
 
     metrics = evaluator.evaluate()
-    self.assertEqual(metrics['metrics/scene_graph_triplets/n_example'], 1)
-    self.assertAlmostEqual(metrics['metrics/scene_graph_triplets/recall@50'],
-                           0.0)
-    self.assertAlmostEqual(metrics['metrics/scene_graph_triplets/recall@100'],
-                           0.0)
+    self.assertEqual(metrics['scene_graph_n_example'], 1)
+    self.assertAlmostEqual(metrics['scene_graph_recall@50'], 0.0)
+    self.assertAlmostEqual(metrics['scene_graph_recall@100'], 0.0)
+    self.assertAlmostEqual(metrics['scene_graph_per_image_recall@50'], 0.0)
+    self.assertAlmostEqual(metrics['scene_graph_per_image_recall@100'], 0.0)
 
   def test_evaluate_single_example2_threshold(self):
     evaluator = SceneGraphEvaluator(iou_threshold=0.25)
@@ -102,11 +102,11 @@ class SceneGraphEvaluatorTest(tf.test.TestCase):
         })
 
     metrics = evaluator.evaluate()
-    self.assertEqual(metrics['metrics/scene_graph_triplets/n_example'], 1)
-    self.assertAlmostEqual(metrics['metrics/scene_graph_triplets/recall@50'],
-                           0.5)
-    self.assertAlmostEqual(metrics['metrics/scene_graph_triplets/recall@100'],
-                           0.5)
+    self.assertEqual(metrics['scene_graph_n_example'], 1)
+    self.assertAlmostEqual(metrics['scene_graph_recall@50'], 0.5)
+    self.assertAlmostEqual(metrics['scene_graph_recall@100'], 0.5)
+    self.assertAlmostEqual(metrics['scene_graph_per_image_recall@50'], 0.5)
+    self.assertAlmostEqual(metrics['scene_graph_per_image_recall@100'], 0.5)
 
   def test_evaluate_single_example3(self):
     evaluator = SceneGraphEvaluator()
@@ -130,11 +130,11 @@ class SceneGraphEvaluatorTest(tf.test.TestCase):
         })
 
     metrics = evaluator.evaluate()
-    self.assertEqual(metrics['metrics/scene_graph_triplets/n_example'], 1)
-    self.assertAlmostEqual(metrics['metrics/scene_graph_triplets/recall@50'],
-                           0.5)
-    self.assertAlmostEqual(metrics['metrics/scene_graph_triplets/recall@100'],
-                           0.5)
+    self.assertEqual(metrics['scene_graph_n_example'], 1)
+    self.assertAlmostEqual(metrics['scene_graph_recall@50'], 0.5)
+    self.assertAlmostEqual(metrics['scene_graph_recall@100'], 0.5)
+    self.assertAlmostEqual(metrics['scene_graph_per_image_recall@50'], 0.5)
+    self.assertAlmostEqual(metrics['scene_graph_per_image_recall@100'], 0.5)
 
   def test_evaluate_single_example4(self):
     evaluator = SceneGraphEvaluator()
@@ -160,11 +160,11 @@ class SceneGraphEvaluatorTest(tf.test.TestCase):
         })
 
     metrics = evaluator.evaluate()
-    self.assertEqual(metrics['metrics/scene_graph_triplets/n_example'], 1)
-    self.assertAlmostEqual(metrics['metrics/scene_graph_triplets/recall@50'],
-                           1.0)
-    self.assertAlmostEqual(metrics['metrics/scene_graph_triplets/recall@100'],
-                           1.0)
+    self.assertEqual(metrics['scene_graph_n_example'], 1)
+    self.assertAlmostEqual(metrics['scene_graph_recall@50'], 1.0)
+    self.assertAlmostEqual(metrics['scene_graph_recall@100'], 1.0)
+    self.assertAlmostEqual(metrics['scene_graph_per_image_recall@50'], 1.0)
+    self.assertAlmostEqual(metrics['scene_graph_per_image_recall@100'], 1.0)
 
   def test_get_estimator_eval_metric_ops(self):
     image_id = tf.placeholder(tf.int64, shape=[])
@@ -201,7 +201,7 @@ class SceneGraphEvaluatorTest(tf.test.TestCase):
 
     evaluator = SceneGraphEvaluator()
     eval_metric_ops = evaluator.get_estimator_eval_metric_ops(eval_dict)
-    _, update_op = eval_metric_ops['metrics/scene_graph_triplets/recall@50']
+    _, update_op = eval_metric_ops['scene_graph_recall@50']
 
     with self.test_session() as sess:
       sess.run(update_op,
@@ -229,8 +229,7 @@ class SceneGraphEvaluatorTest(tf.test.TestCase):
                        np.array([[1, 1, 2, 1.5]], dtype=np.float32),
                })
 
-      recall50 = sess.run(
-          eval_metric_ops['metrics/scene_graph_triplets/recall@50'][0])
+      recall50 = sess.run(eval_metric_ops['scene_graph_recall@50'][0])
       self.assertAlmostEqual(0.5, recall50)
 
   def test_get_estimator_eval_metric_ops_gt_padding(self):
@@ -268,7 +267,7 @@ class SceneGraphEvaluatorTest(tf.test.TestCase):
 
     evaluator = SceneGraphEvaluator()
     eval_metric_ops = evaluator.get_estimator_eval_metric_ops(eval_dict)
-    _, update_op = eval_metric_ops['metrics/scene_graph_triplets/recall@50']
+    _, update_op = eval_metric_ops['scene_graph_recall@50']
 
     with self.test_session() as sess:
       sess.run(update_op,
@@ -296,8 +295,7 @@ class SceneGraphEvaluatorTest(tf.test.TestCase):
                        np.array([[1, 1, 2, 1.5]], dtype=np.float32),
                })
 
-      recall50 = sess.run(
-          eval_metric_ops['metrics/scene_graph_triplets/recall@50'][0])
+      recall50 = sess.run(eval_metric_ops['scene_graph_recall@50'][0])
       self.assertAlmostEqual(1.0, recall50)
 
 

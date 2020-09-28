@@ -107,6 +107,8 @@ class SceneGraphEvaluator(object):
     total_n_triple = 0
     total_recall50 = 0
     total_recall100 = 0
+    per_image_recall50 = []
+    per_image_recall100 = []
 
     for image_index, (image_id,
                       image_info) in enumerate(self._image_annotations.items()):
@@ -117,16 +119,26 @@ class SceneGraphEvaluator(object):
       total_recall50 += recall50
       total_recall100 += recall100
 
+      if n_triples > 0:
+        per_image_recall50.append(1.0 * recall50 / n_triples)
+        per_image_recall100.append(1.0 * recall100 / n_triples)
+      else:
+        logging.warn('Image %s has no ground-truth annotations.')
+
       if (image_index + 1) % 100 == 0:
         logging.info('Evaluate on %i/%i.', image_index + 1,
                      len(self._image_annotations))
 
     return {
-        'metrics/scene_graph_triplets/recall@50':
+        'scene_graph_recall@50':
             total_recall50 / max(total_n_triple, _EPSILON),
-        'metrics/scene_graph_triplets/recall@100':
+        'scene_graph_recall@100':
             total_recall100 / max(total_n_triple, _EPSILON),
-        'metrics/scene_graph_triplets/n_example':
+        'scene_graph_per_image_recall@50':
+            np.array(per_image_recall50).mean(),
+        'scene_graph_per_image_recall@100':
+            np.array(per_image_recall100).mean(),
+        'scene_graph_n_example':
             len(self._image_annotations),
     }
 
@@ -258,9 +270,11 @@ class SceneGraphEvaluator(object):
     """
     update_op = self.add_eval_dict(eval_dict)
     metric_names = [
-        'metrics/scene_graph_triplets/n_example',
-        'metrics/scene_graph_triplets/recall@50',
-        'metrics/scene_graph_triplets/recall@100',
+        'scene_graph_n_example',
+        'scene_graph_recall@50',
+        'scene_graph_recall@100',
+        'scene_graph_per_image_recall@50',
+        'scene_graph_per_image_recall@100',
     ]
 
     def first_value_func():
