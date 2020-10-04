@@ -32,6 +32,7 @@ import numpy as np
 import tensorflow as tf
 
 import tf_slim as slim
+from models import graph_nms
 
 from protos import model_pb2
 
@@ -49,11 +50,77 @@ from models import utils
 from object_detection.metrics import coco_evaluation
 from object_detection.core import standard_fields
 
+from bert.modeling import transformer_model
+
 from metrics.scene_graph_evaluation import SceneGraphEvaluator
 
 
 class WSSceneGraphRnnRefine(ws_scene_graph.WSSceneGraph):
   """WSSceneGraphRnnRefine model to provide instance-level annotations. """
+
+  def _transformer_contextualize(self, subject_feature, object_feature,
+                                 relation_feature):
+    """Uses Transformer to contextualize the subject/object/relation features.
+
+    Args:
+      subject_feature: A [batch, max_n_triple, dims] float tensor.
+      object_feature: A [batch, max_n_triple, dims] float tensor.
+      relation_feature: A [batch, max_n_triple, dims] float tensor.
+
+    Args:
+      subject_feature: A [batch, max_n_triple, output_dims] float tensor.
+      object_feature: A [batch, max_n_triple, output_dims] float tensor.
+      relation_feature: A [batch, max_n_triple, output_dims] float tensor.
+    """
+    input_tensor = tf.stack([subject_feature, object_feature, relation_feature],
+                            axis=1)
+    hidden_size = input_tensor.shape[-1].value
+    with tf.variable_scope(tf.get_variable_scope(), reuse=tf.AUTO_REUSE):
+      output_tensor = transformer_model(
+          input_tensor,
+          hidden_size=hidden_size,
+          num_hidden_layers=self.options.transformer_layers,
+          intermediate_size=hidden_size * 2,
+          attention_probs_dropout_prob=self.options.transformer_dropout_prob)
+    (subject_feature, object_feature,
+     relation_feature) = tf.unstack(output_tensor, axis=1)
+    return subject_feature, object_feature, relation_feature
+
+  def _contextualize(self, subject_feature, object_feature, relation_feature):
+    """Contextualize the subject/object/relation features.
+
+    Args:
+      subject_feature: A [batch, max_n_triple, dims] float tensor.
+      object_feature: A [batch, max_n_triple, dims] float tensor.
+      relation_feature: A [batch, max_n_triple, dims] float tensor.
+
+    Args:
+      subject_feature: A [batch, max_n_triple, output_dims] float tensor.
+      object_feature: A [batch, max_n_triple, output_dims] float tensor.
+      relation_feature: A [batch, max_n_triple, output_dims] float tensor.
+    """
+    if self.options.use_transformer:
+      batch = subject_feature.shape[0].value
+      max_n_triple = tf.shape(subject_feature)[1]
+
+      # Reshape features to [batch * max_n_triple, dims].
+      reshape_fn = lambda x: tf.reshape(x, [-1, x.shape[-1].value])
+      subject_feature = reshape_fn(subject_feature)
+      object_feature = reshape_fn(object_feature)
+      relation_feature = reshape_fn(relation_feature)
+
+      (subject_feature, object_feature,
+       relation_feature) = self._transformer_contextualize(
+           subject_feature, object_feature, relation_feature)
+
+      # Reshape output features to [batch, max_n_triple, dims].
+      reshape_fn = lambda x: tf.reshape(
+          x, [batch, max_n_triple, x.shape[-1].value])
+      subject_feature = reshape_fn(subject_feature)
+      object_feature = reshape_fn(object_feature)
+      relation_feature = reshape_fn(relation_feature)
+
+    return subject_feature, object_feature, relation_feature
 
   def _beam_search_refine_triple(self,
                                  n_triple,
@@ -83,6 +150,9 @@ class WSSceneGraphRnnRefine(ws_scene_graph.WSSceneGraph):
     #    * object_feature = [batch * max_n_triple * beam_size, dims] tensors.
     #    * predicate_feature = [batch * max_n_triple * beam_size, dims] tensors.
     relation_feature = tf.add(subject_feature, object_feature)
+    (subject_feature, object_feature,
+     relation_feature) = self._contextualize(subject_feature, object_feature,
+                                             relation_feature)
     visual_feature_list = []
     for i, visual_feature in enumerate(
         [subject_feature, object_feature, relation_feature]):
@@ -259,40 +329,20 @@ class WSSceneGraphRnnRefine(ws_scene_graph.WSSceneGraph):
       graph_relation_scores = graph_relation_scores[:, :, 1:]
 
       # Search for the triple proposals.
-      search = GraphNMS(
-          n_proposal=n_proposal,
-          proposals=proposals,
-          proposal_scores=graph_proposal_scores,
-          relation_scores=tf.reshape(
-              graph_relation_scores,
-              [batch, max_n_proposal, max_n_proposal, self.n_predicate]),
-          max_size_per_class=self.options.post_process.max_size_per_class,
-          max_total_size=self.options.post_process.max_total_size,
-          iou_thresh=self.options.post_process.iou_thresh,
-          score_thresh=self.options.post_process.score_thresh,
-          use_class_agnostic_nms=False,
-          use_log_prob=self.options.use_log_prob)
-
-      predictions.update({
-          'search/n_triple': search.n_triple,
-          'search/subject': self.id2entity(search.subject_id),
-          'search/subject/score': search.subject_score,
-          'search/subject/box': search.get_subject_box(proposals),
-          'search/object': self.id2entity(search.object_id),
-          'search/object/score': search.object_score,
-          'search/object/box': search.get_object_box(proposals),
-          'search/predicate': self.id2predicate(search.predicate_id),
-          'search/predicate/score': search.predicate_score,
-      })
+      search_n_triple = predictions['search/n_triple']
+      search_subject_proposal_index = predictions['search/subject/box_index']
+      search_object_proposal_index = predictions['search/object/box_index']
 
       # Beam search.
       # - accum_probs = [batch, max_n_triple, beam_size].
       # - sub_ids, obj_ids, pred_ids = [batch, max_n_triple, beam_size].
       (accum_probs, sub_ids, obj_ids,
        pred_ids) = self._beam_search_refine_triple(
-           search.n_triple,
-           search.get_subject_feature(shared_hiddens),
-           search.get_object_feature(shared_hiddens),
+           search_n_triple,
+           graph_nms.GraphNMS._gather_proposal_by_index(
+               shared_hiddens, search_subject_proposal_index),
+           graph_nms.GraphNMS._gather_proposal_by_index(
+               shared_hiddens, search_object_proposal_index),
            rnn_layers=self.options.rnn_layers,
            num_units=self.options.rnn_hidden_units,
            beam_size=self.options.beam_size)
@@ -306,9 +356,9 @@ class WSSceneGraphRnnRefine(ws_scene_graph.WSSceneGraph):
 
       (n_valid_example, scores, sub, sub_box_index, pred, obj,
        obj_box_index) = utils.beam_search_post_process(
-           search.n_triple,
-           search.subject_proposal_index,
-           search.object_proposal_index,
+           search_n_triple,
+           search_subject_proposal_index,
+           search_object_proposal_index,
            accum_probs,
            sub_ids,
            pred_ids,
@@ -322,9 +372,11 @@ class WSSceneGraphRnnRefine(ws_scene_graph.WSSceneGraph):
           'beam/accum_probs':
               scores,
           'beam/subject/box':
-              search._gather_proposal_by_index(proposals, sub_box_index),
+              graph_nms.GraphNMS._gather_proposal_by_index(
+                  proposals, sub_box_index),
           'beam/object/box':
-              search._gather_proposal_by_index(proposals, obj_box_index),
+              graph_nms.GraphNMS._gather_proposal_by_index(
+                  proposals, obj_box_index),
           'beam/subject':
               self.id2entity(sub),
           'beam/object':
@@ -370,8 +422,12 @@ class WSSceneGraphRnnRefine(ws_scene_graph.WSSceneGraph):
       return tf.nn.rnn_cell.MultiRNNCell([rnn_cell for _ in range(rnn_layers)])
 
     # Create visual sequence features.
-    # - visual_seq_feature = [batch, max_n_triple, 3, visual_dims].
+    # - subject/object/relation_feature = [batch, max_n_triple, visual_dims].
     relation_feature = tf.add(subject_feature, object_feature)
+    (subject_feature, object_feature,
+     relation_feature) = self._contextualize(subject_feature, object_feature,
+                                             relation_feature)
+
     visual_seq_feature = tf.stack(
         [subject_feature, object_feature, relation_feature], 2)
 

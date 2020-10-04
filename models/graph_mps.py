@@ -33,7 +33,8 @@ class GraphMPS(object):
                proposal_to_object,
                subject_to_proposal_weight=1.0,
                proposal_to_proposal_weight=1.0,
-               proposal_to_object_weight=1.0):
+               proposal_to_object_weight=1.0,
+               use_log_prob=False):
     """Initializes the object.
 
     Args:
@@ -45,7 +46,13 @@ class GraphMPS(object):
       subject_to_proposal_weight: Weight of `subject_to_proposal` edges.
       proposal_to_proposal_weight: Weight factor of `proposal_to_proposal` edges.
       proposal_to_object_weight: Weight factor of `proposal_to_object` edges.
+      use_log_prob: If true, use log probability.
     """
+    if use_log_prob:
+      subject_to_proposal = tf.log(tf.maximum(1e-10, subject_to_proposal))
+      proposal_to_proposal = tf.log(tf.maximum(1e-10, proposal_to_proposal))
+      proposal_to_object = tf.log(tf.maximum(1e-10, proposal_to_object))
+
     subject_to_proposal = tf.multiply(subject_to_proposal,
                                       subject_to_proposal_weight)
     proposal_to_proposal = tf.multiply(proposal_to_proposal,

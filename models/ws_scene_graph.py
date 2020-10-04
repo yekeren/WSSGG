@@ -388,9 +388,11 @@ class WSSceneGraph(model_base.ModelBase):
           'search/subject': self.id2entity(search.subject_id),
           'search/subject/score': search.subject_score,
           'search/subject/box': search.get_subject_box(proposals),
+          'search/subject/box_index': search.subject_proposal_index,
           'search/object': self.id2entity(search.object_id),
           'search/object/score': search.object_score,
           'search/object/box': search.get_object_box(proposals),
+          'search/object/box_index': search.object_proposal_index,
           'search/predicate': self.id2predicate(search.predicate_id),
           'search/predicate/score': search.predicate_score,
       })
@@ -632,10 +634,8 @@ class WSSceneGraph(model_base.ModelBase):
     proposal_scores_0 = predictions['refinement/iter_0/proposal_probas']
     relation_scores_0 = predictions['refinement/relation_probas'][:, :, 1:]
 
-    proposal_to_proposal_weight = slim.dropout(
-        self.options.joint_inferring_relation_weight,
-        self.options.mps_relation_dropout_keep_prob,
-        is_training=self.is_training)
+    proposal_to_proposal_weight = self.options.joint_inferring_relation_weight
+
     for i in range(1, 1 + self.options.n_refine_iteration):
       mps = GraphMPS(
           n_triple=n_triple,

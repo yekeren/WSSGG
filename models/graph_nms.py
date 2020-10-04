@@ -40,7 +40,8 @@ class GraphNMS(object):
                max_total_size=100,
                iou_thresh=0.5,
                score_thresh=0.01,
-               use_class_agnostic_nms=False):
+               use_class_agnostic_nms=False,
+               use_log_prob=False):
     """Initializes the object.
 
     Args:
@@ -61,6 +62,7 @@ class GraphNMS(object):
          iou_thresh=iou_thresh,
          use_class_agnostic_nms=use_class_agnostic_nms,
          score_thresh=score_thresh)
+
     self.detection_indices = detection_indices
 
     def _py_per_image_relation_search(num_detections, detection_indices,
@@ -104,7 +106,13 @@ class GraphNMS(object):
             if predicate_score < score_thresh:
               # Relation score is not strong.
               continue
-            hscore = subject_score + object_score + predicate_score
+
+            if use_log_prob:
+              hscore = (np.log(max(1e-10, subject_score)) +
+                        np.log(max(1e-10, object_score)) +
+                        np.log(max(1e-10, predicate_score)))
+            else:
+              hscore = subject_score + object_score + predicate_score
             if 0 <= len(h) < max_total_size or hscore > h[0][0]:
               if len(h) == max_total_size:
                 heapq.heappop(h)
@@ -325,7 +333,8 @@ class GraphNMS(object):
     return self._gather_proposal_by_index(proposal_features,
                                           self.object_proposal_index)
 
-  def _gather_proposal_by_index(self, proposals, proposal_index):
+  @staticmethod
+  def _gather_proposal_by_index(proposals, proposal_index):
     """Gathers proposal box or proposal features by index..
   
     This is a helper function to extract beam-search solution.
@@ -354,7 +363,8 @@ class GraphNMS(object):
     index = tf.stack([batch_index, beam_index, proposal_index], -1)
     return tf.gather_nd(proposals, index)
 
-  def _compute_iou(self, n_proposal, proposals):
+  @staticmethod
+  def _compute_iou(n_proposal, proposals):
     """Computes IoU. 
 
     Args:
