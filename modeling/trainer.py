@@ -19,7 +19,11 @@ from __future__ import print_function
 
 from absl import logging
 
+import os
+import re
 import tensorflow as tf
+
+from best_checkpoint_copier import BestCheckpointCopier
 
 from modeling.utils import optimization
 from modeling.utils import learning_rate_schedule
@@ -119,29 +123,13 @@ def _create_model_fn(pipeline_proto, is_chief=True):
           transform_grads_fn=transform_grads_fn,
           summarize_gradients=True)
 
-      if callable(getattr(model, 'get_adversarial_variables_to_train', None)):
-        logging.info('Create optimizer for adversarial training.')
-
-        adversarial_loss = 0
-        for name, loss in losses.items():
-          adversarial_loss -= loss * train_config.adversarial_loss_weight
-
-        adversarial_optimizer = optimization.create_optimizer(
-            train_config.optimizer, learning_rate=learning_rate)
-
-        (adversarial_variables_to_train
-        ) = model.get_adversarial_variables_to_train()
-        adversarial_train_op = tf.contrib.training.create_train_op(
-            adversarial_loss,
-            adversarial_optimizer,
-            variables_to_train=adversarial_variables_to_train,
-            transform_grads_fn=transform_grads_fn,
-            summarize_gradients=True)
-        train_op = tf.group(train_op, adversarial_train_op)
-
     elif tf.estimator.ModeKeys.EVAL == mode:
 
       eval_metric_ops = model.build_metrics(features, predictions)
+      for name, loss in losses.items():
+        loss_metric = tf.keras.metrics.Mean()
+        loss_metric.update_state(loss)
+        eval_metric_ops['losses/' + name] = loss_metric
 
     elif tf.estimator.ModeKeys.PREDICT == mode:
 
@@ -191,6 +179,11 @@ def train_and_evaluate(pipeline_proto, model_dir, use_mirrored_strategy=False):
   train_spec = tf.estimator.TrainSpec(input_fn=train_input_fn,
                                       max_steps=train_config.max_steps)
 
+  exporter = BestCheckpointCopier(name='ckpts',
+                                  checkpoints_to_keep=4,
+                                  score_metric='metrics/accuracy',
+                                  compare_fn=lambda x, y: x.score > y.score)
+
   # Create eval_spec.
   eval_config = pipeline_proto.eval_config
   eval_input_fn = reader.get_input_fn(pipeline_proto.eval_reader,
@@ -200,7 +193,7 @@ def train_and_evaluate(pipeline_proto, model_dir, use_mirrored_strategy=False):
       steps=eval_config.steps,
       start_delay_secs=eval_config.start_delay_secs,
       throttle_secs=eval_config.throttle_secs,
-      exporters=[])
+      exporters=[exporter])
 
   # Create run_config.
   strategy = None
@@ -263,17 +256,14 @@ def train(pipeline_proto, model_dir, use_mirrored_strategy=False):
   estimator.train(train_input_fn, max_steps=train_config.max_steps)
 
 
-def evaluate(pipeline_proto, model_dir):
+def _evaluate(pipeline_proto, model_dir):
   """Starts a evaluation.
 
   Args:
     pipeline_proto: An instance of pipeline_pb2.Pipeline.
     model_dir: Path to the directory saving checkpoint files.
   """
-  if not isinstance(pipeline_proto, pipeline_pb2.Pipeline):
-    raise ValueError('pipeline_proto has to be an instance of Pipeline.')
-
-  # Create train_spec.
+  # Create eval_spec.
   eval_config = pipeline_proto.eval_config
   eval_input_fn = reader.get_input_fn(pipeline_proto.eval_reader,
                                       is_training=False)
@@ -287,6 +277,60 @@ def evaluate(pipeline_proto, model_dir):
                                      model_dir=model_dir,
                                      config=run_config)
   estimator.evaluate(eval_input_fn, steps=eval_config.steps)
+
+
+def _test(pipeline_proto, model_dir):
+  """Starts to test.
+
+  Args:
+    pipeline_proto: An instance of pipeline_pb2.Pipeline.
+    model_dir: Path to the directory saving checkpoint files.
+  """
+  # Create eval_spec.
+  eval_input_fn = reader.get_input_fn(pipeline_proto.test_reader,
+                                      is_training=False)
+
+  run_config = tf.estimator.RunConfig(session_config=tf.ConfigProto(
+      allow_soft_placement=True, gpu_options=tf.GPUOptions(allow_growth=True)))
+
+  # Evaluate.
+  model_fn = _create_model_fn(pipeline_proto, is_chief=run_config.is_chief)
+  estimator = tf.estimator.Estimator(
+      model_fn=model_fn,
+      model_dir=None,  # This is the dir to write summaries.
+      config=run_config)
+  checkpoint_dir = os.path.join(model_dir, 'ckpts')
+  checkpoint_number = 0
+  for file_name in os.listdir(checkpoint_dir):
+    m = re.match(r'model.ckpt-(\d+).meta', file_name)
+    if m:
+      logging.info('Found checkpoint %s.', '.'.join(file_name.split('.')[:-1]))
+      checkpoint_number = max(int(m.group(1)), checkpoint_number)
+
+  if checkpoint_number > 0:
+    checkpoint_path = os.path.join(checkpoint_dir,
+                                   'model.ckpt-%d' % checkpoint_number)
+    logging.info('Found the best checkpoint %s.', checkpoint_path)
+
+    estimator.evaluate(eval_input_fn,
+                       checkpoint_path=checkpoint_path,
+                       steps=30000)
+
+
+def evaluate(pipeline_proto, model_dir, testing=False):
+  """Starts a evaluation.
+
+  Args:
+    pipeline_proto: An instance of pipeline_pb2.Pipeline.
+    model_dir: Path to the directory saving checkpoint files.
+  """
+  if not isinstance(pipeline_proto, pipeline_pb2.Pipeline):
+    raise ValueError('pipeline_proto has to be an instance of Pipeline.')
+
+  if not testing:
+    return _evaluate(pipeline_proto, model_dir)
+
+  return _test(pipeline_proto, model_dir)
 
 
 def predict(pipeline_proto,

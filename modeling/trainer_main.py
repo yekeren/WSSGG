@@ -40,7 +40,7 @@ flags.DEFINE_boolean('use_mirrored_strategy', False,
                      'If true, use mirrored strategy for training.')
 
 flags.DEFINE_enum('job', 'train_and_evaluate',
-                  ['train_and_evaluate', 'train', 'evaluate', 'debug'],
+                  ['train_and_evaluate', 'train', 'evaluate', 'test', 'debug'],
                   'Job type.')
 
 FLAGS = flags.FLAGS
@@ -85,6 +85,10 @@ def main(_):
                   use_mirrored_strategy=FLAGS.use_mirrored_strategy)
   elif 'evaluate' == FLAGS.job:
     trainer.evaluate(pipeline_proto=pipeline_proto, model_dir=FLAGS.model_dir)
+  elif 'test' == FLAGS.job:
+    trainer.evaluate(pipeline_proto=pipeline_proto,
+                     model_dir=FLAGS.model_dir,
+                     testing=True)
   elif 'debug' == FLAGS.job:
     trainer.debug(pipeline_proto=pipeline_proto, model_dir=FLAGS.model_dir)
   else:
