@@ -187,7 +187,8 @@ class WSSceneGraphRnnRefine(ws_scene_graph.WSSceneGraph):
 
     beam_path = []
     beam_token_ids = []
-    accum_probs = None
+    beam_log_probs = []
+    accum_log_probs = None
 
     for i in range(3):
       # Create inputs.
@@ -222,9 +223,14 @@ class WSSceneGraphRnnRefine(ws_scene_graph.WSSceneGraph):
               reuse=(True if i == 1 else
                      False),  # Object reuse variables from subject.
               scope=scope)
-          probs = tf.log(tf.maximum(1e-10, tf.nn.softmax(logits)))
+
+          log_probs = tf.log(tf.maximum(1e-10, tf.nn.softmax(logits)))
+
           if i == 0:
-            probs = tf.reshape(probs, [batch * max_n_triple, num_outputs])
+            log_probs = tf.reshape(log_probs,
+                                   [batch * max_n_triple, num_outputs])
+            accum_log_probs = log_probs
+
             # Tile cell state.
             new_states = []
             for state in current_states:
@@ -233,17 +239,20 @@ class WSSceneGraphRnnRefine(ws_scene_graph.WSSceneGraph):
               new_states.append(tf.nn.rnn_cell.LSTMStateTuple(c, h))
             current_states = tuple(new_states)
           else:
-            probs = tf.reshape(accum_probs + probs,
-                               [batch * max_n_triple, beam_size * num_outputs])
+            accum_log_probs = tf.reshape(
+                accum_log_probs + log_probs,
+                [batch * max_n_triple, beam_size * num_outputs])
+            log_probs = tf.reshape(
+                log_probs, [batch * max_n_triple, beam_size * num_outputs])
 
-          # Keep top-kpredictions.
-          # - best_probs = [batch * max_n_triple * beam_size, 1].
+          # Keep top-k predictions.
+          # - accum_log_probs = [batch * max_n_triple * beam_size, 1].
           # - indices = [batch * max_n_triple * beam_size].
-          best_probs, indices = tf.nn.top_k(probs, beam_size)
+          best_log_probs, indices = tf.nn.top_k(accum_log_probs, beam_size)
+          beam_log_probs.append(best_log_probs)
 
           indices = tf.reshape(indices, [-1])
-          best_probs = tf.reshape(best_probs, [-1, 1])
-          accum_probs = best_probs
+          accum_log_probs = tf.reshape(best_log_probs, [-1, 1])
 
           token_id = indices % num_outputs
           beam_parent = indices // num_outputs
@@ -276,19 +285,37 @@ class WSSceneGraphRnnRefine(ws_scene_graph.WSSceneGraph):
     index_beam = tf.broadcast_to(tf.reshape(index_beam, [1, 1, beam_size]),
                                  [batch, max_n_triple, beam_size])
 
+    # Back track predicate.
     indices = tf.stack([index_batch, index_triple, index_beam], -1)
     predicate_ids = tf.gather_nd(predicate_ids, indices)
+    predicate_log_probs = tf.reshape(beam_log_probs[2],
+                                     [batch, max_n_triple, beam_size])
+    predicate_log_probs = tf.gather_nd(predicate_log_probs, indices)
 
+    # - Back track object.
     index_beam = tf.gather_nd(object_index, indices)
     indices = tf.stack([index_batch, index_triple, index_beam], -1)
     object_ids = tf.gather_nd(object_ids, indices)
+    object_log_probs = tf.reshape(beam_log_probs[1],
+                                  [batch, max_n_triple, beam_size])
+    object_log_probs = tf.gather_nd(object_log_probs, indices)
 
+    # - Back track subject.
     index_beam = tf.gather_nd(subject_index, indices)
     indices = tf.stack([index_batch, index_triple, index_beam], -1)
     subject_ids = tf.gather_nd(subject_ids, indices)
+    subject_log_probs = tf.reshape(beam_log_probs[0],
+                                   [batch, max_n_triple, beam_size])
+    subject_log_probs = tf.gather_nd(subject_log_probs, indices)
 
-    accum_probs = tf.reshape(accum_probs, [batch, max_n_triple, beam_size])
-    return accum_probs, subject_ids, object_ids, predicate_ids
+    accum_log_probs = tf.reshape(accum_log_probs,
+                                 [batch, max_n_triple, beam_size])
+
+    predicate_log_probs = predicate_log_probs - object_log_probs
+    object_log_probs = object_log_probs - subject_log_probs
+
+    return (accum_log_probs, subject_ids, subject_log_probs, object_ids,
+            object_log_probs, predicate_ids, predicate_log_probs)
 
   def predict(self, inputs, **kwargs):
     """Predicts the resulting tensors.
@@ -334,10 +361,10 @@ class WSSceneGraphRnnRefine(ws_scene_graph.WSSceneGraph):
       search_object_proposal_index = predictions['search/object/box_index']
 
       # Beam search.
-      # - accum_probs = [batch, max_n_triple, beam_size].
+      # - accum_log_probs = [batch, max_n_triple, beam_size].
       # - sub_ids, obj_ids, pred_ids = [batch, max_n_triple, beam_size].
-      (accum_probs, sub_ids, obj_ids,
-       pred_ids) = self._beam_search_refine_triple(
+      (accum_log_probs, sub_ids, sub_log_probs, obj_ids, obj_log_probs,
+       pred_ids, pred_log_probs) = self._beam_search_refine_triple(
            search_n_triple,
            graph_nms.GraphNMS._gather_proposal_by_index(
                shared_hiddens, search_subject_proposal_index),
@@ -348,29 +375,36 @@ class WSSceneGraphRnnRefine(ws_scene_graph.WSSceneGraph):
            beam_size=self.options.beam_size)
 
       predictions.update({
-          'beam_refine/accum_probs': accum_probs,
+          'beam_refine/accum_log_probs': accum_log_probs,
           'beam_refine/subject': self.id2entity(sub_ids),
+          'beam_refine/subject/score': tf.exp(sub_log_probs),
           'beam_refine/object': self.id2entity(obj_ids),
+          'beam_refine/object/score': tf.exp(obj_log_probs),
           'beam_refine/predicate': self.id2predicate(pred_ids),
+          'beam_refine/predicate/score': tf.exp(pred_log_probs),
       })
 
-      (n_valid_example, scores, sub, sub_box_index, pred, obj,
+      (n_valid_example, accum_log_probs, sub, sub_score, sub_box_index, pred,
+       pred_score, obj, obj_score,
        obj_box_index) = utils.beam_search_post_process(
            search_n_triple,
            search_subject_proposal_index,
            search_object_proposal_index,
-           accum_probs,
+           accum_log_probs,
            sub_ids,
+           tf.exp(sub_log_probs),
            pred_ids,
+           tf.exp(pred_log_probs),
            obj_ids,
+           tf.exp(obj_log_probs),
            max_total_size=self.options.max_total_size,
        )
 
       predictions.update({
           'beam/n_triple':
               n_valid_example,
-          'beam/accum_probs':
-              scores,
+          'beam/accum_log_probs':
+              accum_log_probs,
           'beam/subject/box':
               graph_nms.GraphNMS._gather_proposal_by_index(
                   proposals, sub_box_index),
@@ -383,6 +417,12 @@ class WSSceneGraphRnnRefine(ws_scene_graph.WSSceneGraph):
               self.id2entity(obj),
           'beam/predicate':
               self.id2predicate(pred),
+          'beam/subject/score':
+              sub_score,
+          'beam/object/score':
+              obj_score,
+          'beam/predicate/score':
+              pred_score,
       })
     return predictions
 
