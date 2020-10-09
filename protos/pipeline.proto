@@ -63,9 +63,4 @@ message TrainConfig {
 
   // Max gradient norm to be clipped.
   optional float max_gradient_norm = 8;
-
-  // If true, train a adversarial network.
-  optional bool train_adversarial_network = 9 [default = false];
-
-  optional float adversarial_loss_weight = 10 [default = 1.0];
 }
