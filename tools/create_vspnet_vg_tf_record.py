@@ -31,7 +31,7 @@ import tensorflow as tf
 
 flags.DEFINE_string('split_pkl_file', '',
                     'Pickle file denoting the train/test splits.')
-flags.DEFINE_integer('num_val_examples', 1000,
+flags.DEFINE_integer('num_val_examples', 5000,
                      'Number of examples for validation.')
 flags.DEFINE_string('proposal_coord_pkl_file', '',
                     'Pickle file storing proposal coordinates.')
@@ -46,6 +46,8 @@ flags.DEFINE_string('output_directory', '', 'Path to the output directory')
 FLAGS = flags.FLAGS
 
 _FEATURE_DIMS = 1536
+
+np.random.seed(286)
 
 
 def _read_proposal_features(image_id, txn):
@@ -63,8 +65,11 @@ def _read_proposal_features(image_id, txn):
   return proposal_features.reshape((-1, _FEATURE_DIMS))
 
 
-def _create_tf_example(image_id, proposals, proposal_features,
-                       scene_graph_triples):
+def _create_tf_example(image_id,
+                       proposals,
+                       proposal_features,
+                       scene_graph_triples,
+                       training_split=False):
   """Creates tf example.
 
   Args:
@@ -73,6 +78,7 @@ def _create_tf_example(image_id, proposals, proposal_features,
     proposal_features: A [num_proposals, _FEATURE_DIMS] nparray.
     scene_graph_triples: A list of scene graph triples, including the following
       keys: `subject`, `object`, `predicate`, `subject_box`, `object_box`.
+    training_split: If true, run de-duplicate for the training split.
 
   Returns:
     tf_example: A tf.train.Example proto.
@@ -105,6 +111,8 @@ def _create_tf_example(image_id, proposals, proposal_features,
   feature_dict = {
       'id':
           _int64_feature(image_id),
+      'image/n_proposal':
+          _int64_feature(len(proposals)),
       'image/proposal/bbox/ymin':
           _float_feature_list(proposals[:, 1].tolist()),
       'image/proposal/bbox/xmin':
@@ -118,9 +126,15 @@ def _create_tf_example(image_id, proposals, proposal_features,
   }
 
   # Encode ground-truth scene graphs.
+  dedup_set = set()
   subjects, predicates, objects = [], [], []
   subject_boxes, object_boxes = [], []
   for triple in scene_graph_triples:
+    if training_split and (triple['subject'], triple['predicate'],
+                           triple['object']) in dedup_set:
+      continue
+    dedup_set.add((triple['subject'], triple['predicate'], triple['object']))
+
     subjects.append(triple['subject'])
     predicates.append(triple['predicate'])
     objects.append(triple['object'])
@@ -130,18 +144,18 @@ def _create_tf_example(image_id, proposals, proposal_features,
 
   if scene_graph_triples:
     subject_boxes, object_boxes = (np.stack(subject_boxes),
-                                   np.stack(subject_boxes))
+                                   np.stack(object_boxes))
   else:
     subject_boxes, object_boxes = (np.zeros((0, 4)), np.zeros((0, 4)))
 
   feature_dict.update({
-      'scene_graph/num_triples':
-          _int64_feature(len(scene_graph_triples)),
+      'scene_graph/n_triple':
+          _int64_feature(len(subjects)),
       'scene_graph/subject':
           _string_feature_list(subjects),
-      'scene_graph/predicates':
+      'scene_graph/predicate':
           _string_feature_list(predicates),
-      'scene_graph/objects':
+      'scene_graph/object':
           _string_feature_list(objects),
       # Subject box.
       'scene_graph/subject/bbox/ymin':
@@ -169,7 +183,8 @@ def _create_tf_example(image_id, proposals, proposal_features,
 
 
 def _create_tf_record_from_annotations(image_ids, id_to_proposals,
-                                       id_to_scenegraph, txn, tf_record_file):
+                                       id_to_scenegraph, txn, tf_record_file,
+                                       num_output_parts, training_split):
   """Creates tf record files.
 
   Args:
@@ -179,7 +194,10 @@ def _create_tf_record_from_annotations(image_ids, id_to_proposals,
     txn: Transaction object for readong lmdb file.
     tf_record_file: A tfrecord filename denoting the output file.
   """
-  writer = tf.io.TFRecordWriter(tf_record_file)
+  writers = []
+  for i in range(num_output_parts):
+    filename = tf_record_file + '-%05d-of-%05d' % (i, num_output_parts)
+    writers.append(tf.io.TFRecordWriter(filename))
 
   for i, image_id in enumerate(image_ids):
     if image_id not in id_to_scenegraph:
@@ -191,13 +209,14 @@ def _create_tf_record_from_annotations(image_ids, id_to_proposals,
     assert proposals.shape[0] == proposal_features.shape[0]
 
     tf_example = _create_tf_example(image_id, proposals, proposal_features,
-                                    scene_graph_triples)
-    writer.write(tf_example.SerializeToString())
+                                    scene_graph_triples, training_split)
+    writers[i % num_output_parts].write(tf_example.SerializeToString())
 
     if (i + 1) % 500 == 0:
       logging.info('On example %i/%i', i + 1, len(image_ids))
 
-  writer.close()
+  for writer in writers:
+    writer.close()
   logging.info('Processed %i examples.', len(image_ids))
 
 
@@ -313,13 +332,13 @@ def main(_):
     with env.begin() as txn:
       _create_tf_record_from_annotations(
           test_ids, id_to_proposals, id_to_scenegraph, txn,
-          os.path.join(output_directory, 'test.tfrecord'))
-      _create_tf_record_from_annotations(
-          val_ids, id_to_proposals, id_to_scenegraph, txn,
-          os.path.join(output_directory, 'val.tfrecord'))
+          os.path.join(output_directory, 'test.tfrecord'), 5, False)
       _create_tf_record_from_annotations(
           train_ids, id_to_proposals, id_to_scenegraph, txn,
-          os.path.join(output_directory, 'train.tfrecord'))
+          os.path.join(output_directory, 'train.tfrecord'), 10, True)
+      _create_tf_record_from_annotations(
+          val_ids, id_to_proposals, id_to_scenegraph, txn,
+          os.path.join(output_directory, 'val.tfrecord'), 1, False)
 
   logging.info('Done')
 
