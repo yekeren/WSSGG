@@ -272,19 +272,23 @@ def post_process_pseudo_detection_labels(pseudo_labels, normalize=False):
 
 
 def beam_search_post_process(n_triple,
-                             subject_box_index,
-                             object_box_index,
+                             subject_box,
+                             object_box,
                              beam_scores,
                              beam_subject,
+                             beam_subject_score,
                              beam_predicate,
+                             beam_predicate_score,
                              beam_object,
+                             beam_object_score,
+                             iou_thresh=0.5,
                              max_total_size=100):
   """
 
   Args:
     n_triple: A [batch] int tensor.
-    subject_box_index: A [batch, max_n_triple] int tensor.
-    object_box_index: A [batch, max_n_triple] int tensor.
+    subject_box: A [batch, max_n_triple, 4] int tensor.
+    object_box: A [batch, max_n_triple, 4] int tensor.
     beam_scores: A [batch, max_n_triple, beam_size] float tensor.
     beam_subject_ids: A [batch, max_n_triple, beam_size] int tensor.
     beam_predicate_ids: A [batch, max_n_triple, beam_size] int tensor.
@@ -302,6 +306,7 @@ def beam_search_post_process(n_triple,
                                  maxlen=max_n_triple,
                                  dtype=tf.float32)
   reshape_fn = lambda x: tf.reshape(x, [batch, max_n_triple * beam_size])
+  reshape_box_fn = lambda x: tf.reshape(x, [batch, max_n_triple * beam_size, 4])
 
   # Note: consider scores of ZERO.
   top_k = max_n_triple * beam_size  # No difference from sorting.
@@ -313,99 +318,161 @@ def beam_search_post_process(n_triple,
                               [batch, top_k])
   indices = tf.stack([indices_0, indices_1], -1)
 
-  # Extract results.
-  subject_box_index = tf.broadcast_to(tf.expand_dims(subject_box_index, 2),
-                                      [batch, max_n_triple, beam_size])
-  object_box_index = tf.broadcast_to(tf.expand_dims(object_box_index, 2),
-                                     [batch, max_n_triple, beam_size])
+  # Extract top results.
+  subject_box = tf.broadcast_to(tf.expand_dims(subject_box, 2),
+                                [batch, max_n_triple, beam_size, 4])
+  object_box = tf.broadcast_to(tf.expand_dims(object_box, 2),
+                               [batch, max_n_triple, beam_size, 4])
 
-  ret_subject_box_index = tf.gather_nd(reshape_fn(subject_box_index), indices)
-  ret_object_box_index = tf.gather_nd(reshape_fn(object_box_index), indices)
+  ret_subject_box = tf.gather_nd(reshape_box_fn(subject_box), indices)
+  ret_object_box = tf.gather_nd(reshape_box_fn(object_box), indices)
   ret_subject = tf.gather_nd(reshape_fn(beam_subject), indices)
+  ret_subject_score = tf.gather_nd(reshape_fn(beam_subject_score), indices)
   ret_object = tf.gather_nd(reshape_fn(beam_object), indices)
+  ret_object_score = tf.gather_nd(reshape_fn(beam_object_score), indices)
   ret_predicate = tf.gather_nd(reshape_fn(beam_predicate), indices)
+  ret_predicate_score = tf.gather_nd(reshape_fn(beam_predicate_score), indices)
 
   n_valid_example = tf.reduce_sum(tf.cast(best_scores > -9999999.0, tf.int32),
                                   -1)
 
-  def _py_per_image_nms(n_example, scores, sub, sub_box_ind, pred, obj,
-                        obj_box_ind):
-    total = 0
-    dedup = set()
+  def _py_per_image_nms(n_example, scores, sub, sub_score, sub_box, pred,
+                        pred_score, obj, obj_score, obj_box):
+    dedup_index = []
+    dedup_score = []
+    dedup_subject = []
+    dedup_subject_score = []
+    dedup_subject_box = []
+    dedup_predicate = []
+    dedup_predicate_score = []
+    dedup_object = []
+    dedup_object_score = []
+    dedup_object_box = []
 
-    ret_data = []
-    ret_scores = []
+    subject_iou = box_ops.py_iou(np.expand_dims(sub_box, 1),
+                                 np.expand_dims(sub_box, 0))
+    object_iou = box_ops.py_iou(np.expand_dims(obj_box, 1),
+                                np.expand_dims(obj_box, 0))
+
     for i in range(n_example):
-      key = (sub[i], sub_box_ind[i], pred[i], obj[i], obj_box_ind[i])
-      if not key in dedup:
-        dedup.add(key)
-        ret_data.append(list(key))
-        ret_scores.append(scores[i])
+      j = 0
+      while j < len(dedup_score):
+        if (sub[i] == dedup_subject[j] and pred[i] == dedup_predicate[j] and
+            obj[i] == dedup_object[j] and
+            subject_iou[i, dedup_index[j]] > iou_thresh and
+            object_iou[i, dedup_index[j]] > iou_thresh):
+          break
+        j += 1
 
-    if len(dedup):
-      ret_scores = np.array(ret_scores, np.float32)
-      ret_data = np.array(ret_data, np.int32)
+      if j == len(dedup_score):
+        dedup_index.append(i)
+        dedup_score.append(scores[i])
+        dedup_subject.append(sub[i])
+        dedup_subject_score.append(sub_score[i])
+        dedup_subject_box.append(sub_box[i])
+        dedup_predicate.append(pred[i])
+        dedup_predicate_score.append(pred_score[i])
+        dedup_object.append(obj[i])
+        dedup_object_score.append(obj_score[i])
+        dedup_object_box.append(obj_box[i])
+        if len(dedup_score) >= max_total_size:
+          break
+
+    def _pad_fn(x, dtype=np.float32):
+      if isinstance(x, list):
+        x = np.array(x, dtype=dtype)
+      if len(x) < max_total_size:
+        pad = max_total_size - len(x)
+        if len(x.shape) == 1:
+          x = np.concatenate([x, np.zeros((pad), dtype=dtype)], 0)
+        elif len(x.shape) == 2 and x.shape[-1] == 4:
+          x = np.concatenate([x, np.zeros((pad, 4), dtype=dtype)], 0)
+        else:
+          raise ValueError('Not supported')
+
+      return x[:max_total_size]
+
+    if len(dedup_score):
+      return [
+          np.array(len(dedup_score), np.int32),
+          _pad_fn(dedup_score),
+          _pad_fn(dedup_subject, np.int32),
+          _pad_fn(dedup_subject_score),
+          _pad_fn(dedup_subject_box),
+          _pad_fn(dedup_predicate, np.int32),
+          _pad_fn(dedup_predicate_score),
+          _pad_fn(dedup_object, np.int32),
+          _pad_fn(dedup_object_score),
+          _pad_fn(dedup_object_box),
+      ]
     else:
-      ret_scores = np.zeros((0), dtype=np.float32)
-      ret_data = np.zeros((0, 5), dtype=np.int32)
-
-    if len(dedup) < max_total_size:
-      pad = max_total_size - len(dedup)
-      ret_data = np.concatenate(
-          [ret_data, np.zeros((pad, 5), dtype=np.int32)], 0)
-      ret_scores = np.concatenate(
-          [ret_scores, np.zeros((pad), dtype=np.float32)], 0)
-
-    ret_scores = ret_scores[:max_total_size]
-    ret_data = ret_data[:max_total_size, :]
-
-    return [
-        np.array(len(dedup), np.int32), ret_scores, ret_data[:, 0],
-        ret_data[:, 1], ret_data[:, 2], ret_data[:, 3], ret_data[:, 4]
-    ]
+      return [
+          np.array(0, np.int32),
+          np.zeros((max_total_size), np.float32),
+          np.zeros((max_total_size), np.int32),
+          np.zeros((max_total_size), np.float32),
+          np.zeros((max_total_size, 4), np.float32),
+          np.zeros((max_total_size), np.int32),
+          np.zeros((max_total_size), np.float32),
+          np.zeros((max_total_size), np.int32),
+          np.zeros((max_total_size), np.float32),
+          np.zeros((max_total_size, 4), np.float32),
+      ]
 
   def _per_image_nms(elems):
     return tf.py_func(_py_per_image_nms, elems, [
         tf.int32,
         tf.float32,
         tf.int32,
+        tf.float32,
+        tf.float32,
         tf.int32,
+        tf.float32,
         tf.int32,
-        tf.int32,
-        tf.int32,
+        tf.float32,
+        tf.float32,
     ])
 
   batch_outputs = tf.map_fn(_per_image_nms,
                             elems=[
                                 n_valid_example, best_scores, ret_subject,
-                                ret_subject_box_index, ret_predicate,
-                                ret_object, ret_object_box_index
+                                ret_subject_score, ret_subject_box,
+                                ret_predicate, ret_predicate_score, ret_object,
+                                ret_object_score, ret_object_box
                             ],
                             dtype=[
                                 tf.int32,
                                 tf.float32,
                                 tf.int32,
+                                tf.float32,
+                                tf.float32,
                                 tf.int32,
+                                tf.float32,
                                 tf.int32,
-                                tf.int32,
-                                tf.int32,
+                                tf.float32,
+                                tf.float32,
                             ],
                             parallel_iterations=32,
                             back_prop=False)
 
-  (n_valid_example, best_scores, ret_subject, ret_subject_box_index,
-   ret_predicate, ret_object, ret_object_box_index) = batch_outputs
+  (n_valid_example, best_scores, ret_subject, ret_subject_score,
+   ret_subject_box, ret_predicate, ret_predicate_score, ret_object,
+   ret_object_score, ret_object_box) = batch_outputs
 
   n_valid_example.set_shape([batch])
   best_scores.set_shape([batch, max_total_size])
   ret_subject.set_shape([batch, max_total_size])
-  ret_subject_box_index.set_shape([batch, max_total_size])
+  ret_subject_score.set_shape([batch, max_total_size])
+  ret_subject_box.set_shape([batch, max_total_size, 4])
   ret_predicate.set_shape([batch, max_total_size])
+  ret_predicate_score.set_shape([batch, max_total_size])
   ret_object.set_shape([batch, max_total_size])
-  ret_object_box_index.set_shape([batch, max_total_size])
+  ret_object_score.set_shape([batch, max_total_size])
+  ret_object_box.set_shape([batch, max_total_size, 4])
 
-  return (n_valid_example, best_scores, ret_subject, ret_subject_box_index,
-          ret_predicate, ret_object, ret_object_box_index)
+  return (n_valid_example, best_scores, ret_subject, ret_subject_score,
+          ret_subject_box, ret_predicate, ret_predicate_score, ret_object,
+          ret_object_score, ret_object_box)
 
 
 def nms_post_process(n_proposal,
@@ -520,14 +587,24 @@ def compute_spatial_relation_feature(box1, box2):
   area1 = box_ops.area(box1)
   area2 = box_ops.area(box2)
 
+  # safe_div = lambda x, y: tf.div(x, 1e-8 + y)
+  # features_list.extend([
+  #     tf.expand_dims(x, -1) for x in [
+  #         x_distance, y_distance,
+  #         safe_div(x_distance, width1),
+  #         safe_div(x_distance, width2),
+  #         safe_div(y_distance, height1),
+  #         safe_div(y_distance, height2), x_intersect, y_intersect,
+  #         safe_div(x_intersect, width1),
+  #         safe_div(x_intersect, width2),
+  #         safe_div(y_intersect, height1),
+  #         safe_div(y_intersect, height2), intersect_area,
+  #         safe_div(intersect_area, area1),
+  #         safe_div(intersect_area, area2), iou
+  #     ]
+  # ])
   features_list.extend([
-      tf.expand_dims(x, -1) for x in [
-          x_distance, y_distance, x_distance / width1, x_distance /
-          width2, y_distance / height1, y_distance /
-          height2, x_intersect, y_intersect, x_intersect / width1, x_intersect /
-          width2, y_intersect / height1, y_intersect /
-          height2, intersect_area, intersect_area / area1, intersect_area /
-          area2, iou
-      ]
+      tf.expand_dims(x, -1) for x in
+      [x_distance, y_distance, x_intersect, y_intersect, intersect_area, iou]
   ])
   return tf.concat(features_list, -1)
