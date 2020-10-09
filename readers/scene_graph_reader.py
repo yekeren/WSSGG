@@ -101,6 +101,8 @@ def _parse_single_example(example, options):
       'scene_graph/object/box':
           object_boxes,
   }
+  feature_dict['scene_graph/n_triple'] = tf.shape(
+      feature_dict['scene_graph/subject'])[0]
 
   for key in feature_dict.keys():
     if key != 'id' and feature_dict[key].dtype == tf.int64:
