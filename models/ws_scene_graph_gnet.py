@@ -44,8 +44,10 @@ from graph_nets import utils_tf
 
 from models.graph_mps import GraphMPS
 from models.graph_nms import GraphNMS
+
 from modeling.layers import id_to_token
 from modeling.layers import token_to_id
+from modeling.modules import graph_networks
 from modeling.utils import box_ops
 from modeling.utils import hyperparams
 from modeling.utils import masked_ops
@@ -56,7 +58,7 @@ from models import utils
 from object_detection.metrics import coco_evaluation
 from object_detection.core import standard_fields
 
-from utils.scene_graph_evaluation import SceneGraphEvaluator
+from model_utils.scene_graph_evaluation import SceneGraphEvaluator
 
 
 class SelfAttentionEx(_base.AbstractModule):
@@ -751,70 +753,6 @@ class WSSceneGraphGNet(model_base.ModelBase):
                                         max_norm=max_norm)
     return embeddings
 
-  def _compute_graph_embeddings(self, n_node, n_edge, nodes, edges, senders,
-                                receivers):
-    """Computes graph embeddings for the graph nodes and edges.
-
-    Args:
-      n_node: A [batch] int tensor.
-      n_edge: A [batch] int tensor.
-      nodes: Node labels, a [batch, max_n_node] string tensor.
-      edges: Edge labels, a [batch, max_n_edge] string tensor.
-      senders: A [batch, max_n_edge] int tensor.
-      receivers: A [batch, max_n_edge] int tensor.
-      
-    Returns:
-      node_embs: A [batch, max_n_node, dims] float tensor.
-      edge_embs: A [batch, max_n_edge, dims] float tensor.
-    """
-    # Compute the initial node/edge embeddings.
-    node_values = self._compute_initial_embeddings(
-        self.entity2id(nodes),
-        initializer=self.entity_emb_weights,
-        scope='self_attention/node_values',
-        trainable=False)
-    edge_values = self._compute_initial_embeddings(
-        self.predicate2id(edges),
-        initializer=self.predicate_emb_weights,
-        scope='self_attention/edge_values',
-        trainable=False)
-    if self.options.num_tgnet_layers == 0:
-      return node_values
-
-    # Compute the keys of node/edge as required by the self-attention.
-    if self.options.tgnet_key_type == model_pb2.FROM_EMBEDDINGS:
-      logging.info('Infer node/edge keys from embeddings.')
-      node_keys = node_queries = self._compute_initial_embeddings(
-          self.entity2id(nodes),
-          initializer=self.entity_emb_weights,
-          scope='self_attention/node_keys',
-          trainable=True)
-      edge_keys = edge_queries = self._compute_initial_embeddings(
-          self.predicate2id(edges),
-          initializer=self.predicate_emb_weights,
-          scope='self_attention/edge_keys',
-          trainable=True)
-    elif self.options.tgnet_key_type == model_pb2.FROM_FC_LAYERS:
-      logging.info('Infer node/edge keys using fc layers.')
-      with slim.arg_scope(self.arg_scope_fn()):
-        node_keys = node_queries = slim.fully_connected(
-            node_values,
-            num_outputs=self.options.tgnet_key_dims,
-            activation_fn=None,
-            scope='self_attention/node_keys')
-        edge_keys = edge_queries = slim.fully_connected(
-            edge_values,
-            num_outputs=self.options.tgnet_key_dims,
-            activation_fn=None,
-            scope='self_attention/edge_keys')
-    else:
-      raise ValueError('Invalid tgnet_key_type!')
-
-    return self._update_graph_embeddings(n_node, n_edge, node_queries,
-                                         node_keys, node_values, edge_queries,
-                                         edge_keys, edge_values, senders,
-                                         receivers)
-
   def _extended_self_attention(self,
                                graphs_tuple,
                                node_queries,
@@ -858,216 +796,6 @@ class WSSceneGraphGNet(model_base.ModelBase):
     nodes = tf.reshape(graphs_tuple.nodes, [-1, num_heads * value_size])
     return graphs_tuple.replace(nodes=nodes)
 
-  def _self_attention(self,
-                      graphs_tuple,
-                      node_queries,
-                      node_keys,
-                      node_values,
-                      edge_queries,
-                      edge_keys,
-                      edge_values,
-                      num_heads=1):
-    """Uses self-attention to update graph node embeddings.
-
-    Args:
-      graphs_tuple: A GraphTuple object containing the connectivity info.
-      node_queries: A [total_n_node, key_dims] float tensor.
-      node_keys: A [total_n_node, key_dims] float tensor.
-      node_values: A [total_n_node, value_dims] float tensor.
-      edge_queries: A [total_n_edge, key_dims] float tensor.
-      edge_keys: A [total_n_edge, key_dims] float tensor.
-      edge_values: A [total_n_edge, value_dims] float tensor.
-
-    Returns:
-      output_graphs_tuple: A GraphTuple object containing both the 
-        connectivity and node embeddings.
-    """
-    key_size = node_keys.shape[-1].value // num_heads
-    value_size = node_values.shape[-1].value // num_heads
-
-    node_queries = tf.reshape(node_queries, [-1, num_heads, key_size])
-    node_keys = tf.reshape(node_keys, [-1, num_heads, key_size])
-    node_values = tf.reshape(node_values, [-1, num_heads, value_size])
-
-    # Iteratively call the `self_attention`.
-    # - nodes = [total_n_node, num_heads, value_size].
-    self_attention = modules.SelfAttention()
-    for _ in range(self.options.num_tgnet_layers):
-      graphs_tuple = self_attention(node_values, node_keys, node_queries,
-                                    graphs_tuple)
-    nodes = tf.reshape(graphs_tuple.nodes, [-1, num_heads * value_size])
-    return graphs_tuple.replace(nodes=nodes)
-
-  def _update_graph_embeddings(self,
-                               batch_n_node,
-                               batch_n_edge,
-                               batch_node_queries,
-                               batch_node_keys,
-                               batch_node_values,
-                               batch_edge_queries,
-                               batch_edge_keys,
-                               batch_edge_values,
-                               batch_senders,
-                               batch_receivers,
-                               num_heads=5):
-    """Get triplets from pseudo graph.
-    
-      A helper function to check the compatibility of the pseudo graph and the
-      triplets annotation. Note `n_edge == n_triple`.
-
-    Args:
-      batch_n_node: A [batch] int tensor.
-      batch_n_edge: A [batch] int tensor.
-      batch_node_queries: A [batch, max_n_node, key_dims] float tensor.
-      batch_node_keys: A [batch, max_n_node, key_dims] float tensor.
-      batch_node_values: A [batch, max_n_node, value_dims] float tensor.
-      batch_edge_queries: A [batch, max_n_edge, key_dims] float tensor.
-      batch_edge_keys: A [batch, max_n_edge, key_dims] float tensor.
-      batch_edge_values: A [batch, max_n_edge, value_dims] float tensor.
-      batch_senders: A [batch, max_n_edge] int tensor.
-      batch_receivers: A [batch, max_n_edge] int tensor.
-      num_heads: Number attention heads.
-
-    Returns
-      node_embs: A [batch, max_n_node, value_dims] float tensor.
-    """
-    assert (batch_node_queries.shape[-1].value % num_heads == 0 and
-            batch_node_keys.shape[-1].value % num_heads == 0 and
-            batch_node_values.shape[-1].value % num_heads == 0)
-    assert (batch_edge_queries.shape[-1].value % num_heads == 0 and
-            batch_edge_keys.shape[-1].value % num_heads == 0 and
-            batch_edge_values.shape[-1].value % num_heads == 0)
-    assert (
-        (batch_node_queries.shape[-1].value ==
-         batch_edge_queries.shape[-1].value) and
-        (batch_node_keys.shape[-1].value == batch_edge_keys.shape[-1].value) and
-        (batch_node_values.shape[-1].value == batch_edge_values.shape[-1].value)
-    )
-
-    dims = batch_node_values.shape[-1].value
-    batch_size = batch_node_values.shape[0].value
-    max_n_node = tf.shape(batch_node_values)[1]
-    max_n_edge = tf.shape(batch_edge_values)[1]
-
-    # Since `graph_nets` requires varlen data without padding,
-    # we simply unpack the batch and repack using `graph_nets`.
-    graph_dicts = []
-    graph_node_queries = []
-    graph_node_keys = []
-    graph_node_values = []
-    graph_edge_queries = []
-    graph_edge_keys = []
-    graph_edge_values = []
-    for (n_node, n_edge, node_queries, node_keys, node_values, edge_queries,
-         edge_keys, edge_values,
-         senders, receivers) in zip(tf.unstack(batch_n_node),
-                                    tf.unstack(batch_n_edge),
-                                    tf.unstack(batch_node_queries),
-                                    tf.unstack(batch_node_keys),
-                                    tf.unstack(batch_node_values),
-                                    tf.unstack(batch_edge_queries),
-                                    tf.unstack(batch_edge_keys),
-                                    tf.unstack(batch_edge_values),
-                                    tf.unstack(batch_senders),
-                                    tf.unstack(batch_receivers)):
-      if self.options.tgnet_graph_type == model_pb2.SELF_ATTENTION:
-        # Extend the graph to be Bi-directional.
-        new_senders = tf.concat([senders[:n_edge], receivers[:n_edge]], 0)
-        new_receivers = tf.concat([receivers[:n_edge], senders[:n_edge]], 0)
-        new_n_edge = 2 * n_edge
-
-        # Add self-loop.
-        new_n_edge += n_node
-        new_senders = tf.concat([new_senders, tf.range(n_node)], 0)
-        new_receivers = tf.concat([new_receivers, tf.range(n_node)], 0)
-
-        # Pack query, key, value for both nodes and edges.
-        graph_node_queries.append(node_queries[:n_node])
-        graph_node_keys.append(node_keys[:n_node])
-        graph_node_values.append(node_values[:n_node])
-        graph_edge_queries.append(edge_queries[:n_edge])
-        graph_edge_keys.append(edge_keys[:n_edge])
-        graph_edge_values.append(edge_values[:n_edge])
-
-        graph_dicts.append({
-            graphs.N_NODE: n_node,
-            graphs.N_EDGE: new_n_edge,
-            graphs.SENDERS: new_senders,
-            graphs.RECEIVERS: new_receivers,
-        })
-      else:
-        # Extend the graph to be Bi-directional.
-        new_senders = tf.concat([senders[:n_edge], receivers[:n_edge]], 0)
-        new_receivers = tf.concat([receivers[:n_edge], senders[:n_edge]], 0)
-        new_n_edge = 2 * n_edge
-
-        # Pack query, key, value for both nodes and edges.
-        graph_node_queries.append(node_queries[:n_node])
-        graph_node_keys.append(node_keys[:n_node])
-        graph_node_values.append(node_values[:n_node])
-        graph_edge_queries.append(
-            tf.concat([edge_queries[:n_edge], edge_queries[:n_edge]], 0))
-        graph_edge_keys.append(
-            tf.concat([edge_keys[:n_edge], edge_keys[:n_edge]], 0))
-        graph_edge_values.append(
-            tf.concat([edge_values[:n_edge], edge_values[:n_edge]], 0))
-
-        graph_dicts.append({
-            graphs.N_NODE: n_node,
-            graphs.N_EDGE: new_n_edge,
-            graphs.SENDERS: new_senders,
-            graphs.RECEIVERS: new_receivers,
-        })
-
-    # Concatenate the graph features.
-    graphs_tuple = utils_tf.data_dicts_to_graphs_tuple(graph_dicts)
-    graph_node_queries = tf.concat(graph_node_queries, 0)
-    graph_node_keys = tf.concat(graph_node_keys, 0)
-    graph_node_values = tf.concat(graph_node_values, 0)
-    graph_edge_queries = tf.concat(graph_edge_queries, 0)
-    graph_edge_keys = tf.concat(graph_edge_keys, 0)
-    graph_edge_values = tf.concat(graph_edge_values, 0)
-
-    original_node_embs = graph_node_values
-
-    if self.options.tgnet_graph_type == model_pb2.SELF_ATTENTION:
-      output_graphs_tuple = self._self_attention(
-          graphs_tuple,
-          graph_node_queries,
-          graph_node_keys,
-          graph_node_values,
-          graph_edge_queries,
-          graph_edge_keys,
-          graph_edge_values,
-          num_heads=self.options.tgnet_num_heads)
-    elif self.options.tgnet_graph_type == model_pb2.SELF_ATTENTION_EX:
-      output_graphs_tuple = self._extended_self_attention(
-          graphs_tuple,
-          graph_node_queries,
-          graph_node_keys,
-          graph_node_values,
-          graph_edge_queries,
-          graph_edge_keys,
-          graph_edge_values,
-          num_heads=self.options.tgnet_num_heads)
-    else:
-      raise ValueError('Invalid tgnet_graph_type')
-
-    output_graphs_tuple = output_graphs_tuple.replace(
-        nodes=original_node_embs + output_graphs_tuple.nodes,  # Add Residual.
-        edges=None)
-
-    # Unpack the graph tuple and pad the embeddings.
-    node_embs = []
-    for i in range(batch_size):
-      output_graph_tuple_at_i = utils_tf.get_graph(output_graphs_tuple, i)
-      n_node = tf.squeeze(output_graph_tuple_at_i.n_node)
-      node_embs.append(
-          tf.pad(tensor=output_graph_tuple_at_i.nodes,
-                 paddings=[[0, max_n_node - n_node], [0, 0]]))
-
-    return tf.stack(node_embs, 0)
-
   def build_losses(self, inputs, predictions, **kwargs):
     """Computes loss tensors.
 
@@ -1095,14 +823,32 @@ class WSSceneGraphGNet(model_base.ModelBase):
     senders = inputs['scene_pseudo_graph/senders']
     receivers = inputs['scene_pseudo_graph/receivers']
 
-    # Compute initial node embeddings.
-    node_embs = self._compute_graph_embeddings(n_node, n_edge, nodes, edges,
-                                               senders, receivers)
+    # Using graph network to update node and edge embeddings.
+    node_embs = self._compute_initial_embeddings(
+        self.entity2id(nodes),
+        initializer=self.entity_emb_weights,
+        scope='tgnet/node/embeddings',
+        trainable=False)
+    edge_embs = self._compute_initial_embeddings(
+        self.predicate2id(edges),
+        initializer=self.predicate_emb_weights,
+        scope='tgnet/edge/embeddings',
+        trainable=False)
+
+    tgnet = graph_networks.build_graph_network(self.options.text_graph_network,
+                                               is_training=self.is_training)
+    with slim.arg_scope(self.arg_scope_fn()):
+      updated_node_embs, updated_edge_embs = tgnet.compute_graph_embeddings(
+          n_node, n_edge, node_embs, edge_embs, senders, receivers)
+
+    # node_embs = self._compute_graph_embeddings(n_node, n_edge, nodes, edges,
+    #                                            senders, receivers)
 
     # Parse triplets from pseudo graph.
     (n_triple, subject_ids, object_ids, predicate_ids, subject_text_embs,
      object_text_embs) = self._get_triplets_from_pseudo_graph(
-         n_node, n_edge, nodes, node_embs, edges, senders, receivers, inputs)
+         n_node, n_edge, nodes, updated_node_embs, edges, senders, receivers,
+         inputs)
 
     # Multiple Entity Detection (MED).
     # - `initial_detection_scores`=[batch, max_n_proposal, n_entity].
