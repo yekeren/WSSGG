@@ -227,7 +227,7 @@ class NoGraph(GraphNet):
 
 
 class SelfAttention(GraphNet):
-  """Graph interface."""
+  """Self attention model using a RNN cell."""
 
   def __init__(self, options, is_training=False):
     """Initializes the graph network.
@@ -241,8 +241,8 @@ class SelfAttention(GraphNet):
     if not isinstance(options, graph_network_pb2.SelfAttention):
       raise ValueError('Options has to be an SelfAttention proto.')
 
-    self.add_bi_directional_edges = True
-    self.add_self_loop_edges = True
+    self.add_bi_directional_edges = options.add_bi_directional_edges
+    self.add_self_loop_edges = options.add_self_loop_edges
 
   def _build_graph(self, graphs_tuple):
     """Builds graph network.
@@ -254,7 +254,6 @@ class SelfAttention(GraphNet):
       output_graphs_tuple: A updated GraphTuple instance.
     """
     node_values = graphs_tuple.nodes
-    edge_values = graphs_tuple.edges
 
     # Check configuations.
     num_heads = self.options.n_head
@@ -266,47 +265,173 @@ class SelfAttention(GraphNet):
     key_size = key_dims // num_heads
     value_size = value_dims // num_heads
 
-    node_values = tf.reshape(node_values, [-1, num_heads, value_size])
+    # Compute the key/query tensors shared across layers.
+    if self.options.n_layer:
+      with tf.variable_scope('self_attention'):
+        node_queries = slim.fully_connected(node_values,
+                                            num_outputs=key_dims,
+                                            activation_fn=None,
+                                            biases_initializer=None,
+                                            scope='node_queries')
+        node_keys = slim.fully_connected(node_values,
+                                         num_outputs=key_dims,
+                                         activation_fn=None,
+                                         biases_initializer=None,
+                                         scope='node_keys')
+
+    # Initial RNN states.
+    rnn_nodes = snt.GRU(hidden_size=value_dims)
+    node_states = rnn_nodes.initial_state(
+        batch_size=tf.shape(graphs_tuple.nodes)[0])
 
     # Stack layers.
     self_attention = modules.SelfAttention()
     graphs_tuple = graphs_tuple.replace(nodes=None, edges=None)
 
-    reuse = False
     for _ in range(self.options.n_layer):
-      # Predict node keys/queries.
-      with tf.variable_scope('self_attention', reuse=reuse):
-        node_keys = slim.fully_connected(node_values,
-                                         num_outputs=self.options.key_dims,
-                                         activation_fn=None,
-                                         scope='node_keys')
-        if self.options.share_query_with_key:
-          node_queries = node_keys
-        else:
-          node_queries = slim.fully_connected(node_values,
-                                              num_outputs=self.options.key_dims,
-                                              activation_fn=None,
-                                              scope='node_queries')
+      _, node_states = rnn_nodes(node_values, node_states)
 
       # Call graph_nets SelfAttention model.
-      graphs_tuple = self_attention(node_values, node_keys, node_queries,
-                                    graphs_tuple)
-      if self.options.update_residual:
-        node_values = tf.add(node_values, graphs_tuple.nodes)
-      else:
-        node_values = graphs_tuple.nodes
-      graphs_tuple = graphs_tuple.replace(nodes=None, edges=None)
-      reuse = True
+      graphs_tuple = self_attention(
+          tf.reshape(node_values, [-1, num_heads, value_size]),
+          tf.reshape(node_keys, [-1, num_heads, key_size]),
+          tf.reshape(node_queries, [-1, num_heads, key_size]), graphs_tuple)
 
-    # Pack results.
-    nodes = tf.reshape(node_values, [-1, num_heads * value_size])
-    graphs_tuple = graphs_tuple.replace(nodes=nodes, edges=None)
+      node_values = tf.reshape(graphs_tuple.nodes, [-1, value_dims])
+      graphs_tuple = graphs_tuple.replace(nodes=None, edges=None)
+
+    # Pack results, FC layer to project states.
+    _, node_states = rnn_nodes(node_values, node_states)
+
+    node_states = slim.fully_connected(node_states,
+                                       num_outputs=value_dims,
+                                       activation_fn=None,
+                                       scope='node_states')
+
+    graphs_tuple = graphs_tuple.replace(nodes=node_states, edges=None)
+    return graphs_tuple
+
+
+class GNetMPNN(_base.AbstractModule):
+  """Inherits the GraphNets abstract module."""
+
+  def __init__(self, name='GNetMPNN'):
+    super(GNetMPNN, self).__init__(name=name)
+    self._normalizer = modules._unsorted_segment_softmax
+
+  def _build(self,
+             input_graph,
+             hidden_size=50,
+             dropout_rate=0.5,
+             attn_scale=1.0,
+             is_training=False):
+
+    node_values = input_graph.nodes
+    edge_values = input_graph.edges
+
+    value_dims = node_values.shape[-1].value
+    assert value_dims == edge_values.shape[-1].value
+
+    # Compute edge values, sender feature + edge feature.
+    # - edge_values = [total_num_edges, value_dims]
+    edge_value_block = blocks.EdgeBlock(
+        edge_model_fn=lambda: snt.Linear(output_size=value_dims),
+        use_edges=True,
+        use_receiver_nodes=True,
+        use_sender_nodes=True,
+        use_globals=False,
+        name='update_edge_values')
+    edge_values = edge_value_block(input_graph).edges
+    tf.summary.histogram('mpnn/edge_values', edge_values)
+
+    # Attention weight for each edge, logit = f(sender_feature, receiver_feature, edge_feature).
+    # - attention_weights_logits = [total_num_edges, 1]
+    def _edge_mlp():
+      return snt.nets.MLP(output_sizes=[hidden_size, 1], activation=tf.nn.tanh)
+
+    logits_block = blocks.EdgeBlock(
+        #edge_model_fn=lambda: snt.Linear(output_size=1),
+        edge_model_fn=_edge_mlp,
+        use_edges=True,
+        use_receiver_nodes=True,
+        use_sender_nodes=True,
+        use_globals=False,
+        name='update_attention_logits')
+    attention_weights_logits = attn_scale * logits_block(input_graph).edges
+    tf.summary.histogram('mpnn/logits', attention_weights_logits)
+
+    normalized_attention_weight = modules._received_edges_normalizer(
+        input_graph.replace(edges=attention_weights_logits),
+        normalizer=self._normalizer)
+
+    # Attending to sender values according to the weights.
+    # - attended_edges = [total_num_edges, value_dims]
+    attended_edges = edge_values * normalized_attention_weight
+
+    # Summing all of the attended values from each node.
+    # aggregated_attended_values = [total_num_nodes, embedding_size]
+    received_edges_aggregator = blocks.ReceivedEdgesToNodesAggregator(
+        reducer=tf.math.unsorted_segment_sum)
+    aggregated_attended_values = received_edges_aggregator(
+        input_graph.replace(edges=attended_edges))
+
+    return input_graph.replace(nodes=aggregated_attended_values,
+                               edges=edge_values)
+
+
+class MessagePassing(GraphNet):
+  """Self attention model using a RNN cell."""
+
+  def __init__(self, options, is_training=False):
+    """Initializes the graph network.
+
+    Args:
+      options: proto to store the configs.
+      is_training: if True, build the training graph.
+    """
+    super(MessagePassing, self).__init__(options, is_training)
+
+    if not isinstance(options, graph_network_pb2.MessagePassing):
+      raise ValueError('Options has to be an MessagePassing proto.')
+
+    self.add_bi_directional_edges = options.add_bi_directional_edges
+    self.add_self_loop_edges = False
+
+  def _build_graph(self, graphs_tuple):
+    """Builds graph network.
+
+    Args:
+      graphs_tuple: A GraphTuple instance.
+
+    Returns:
+      output_graphs_tuple: A updated GraphTuple instance.
+    """
+    # Initial RNN states.
+    rnn_nodes = snt.GRU(hidden_size=graphs_tuple.nodes.shape[-1].value,
+                        name='node_rnn')
+    rnn_edges = snt.GRU(hidden_size=graphs_tuple.edges.shape[-1].value,
+                        name='edge_rnn')
+    node_states = rnn_nodes.initial_state(
+        batch_size=tf.shape(graphs_tuple.nodes)[0])
+    edge_states = rnn_edges.initial_state(
+        batch_size=tf.shape(graphs_tuple.edges)[0])
+
+    # Stack layers.
+    network = GNetMPNN()
+    for _ in range(self.options.n_layer):
+      _, node_states = rnn_nodes(graphs_tuple.nodes, node_states)
+      _, edge_states = rnn_edges(graphs_tuple.edges, edge_states)
+      graphs_tuple = graphs_tuple.replace(nodes=node_states, edges=edge_states)
+      graphs_tuple = network(graphs_tuple,
+                             hidden_size=self.options.hidden_size,
+                             is_training=self.is_training)
     return graphs_tuple
 
 
 _MODELS = {
     'no_graph': NoGraph,
     'self_attention': SelfAttention,
+    'message_passing': MessagePassing,
 }
 
 

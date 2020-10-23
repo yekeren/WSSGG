@@ -184,6 +184,56 @@ class GraphNetsBuilderTest(tf.test.TestCase):
                         [[[1, 1.2], [2, 2.2], [3, 3.2], [0, 0], [0, 0], [0, 0]],
                          [[1, 1.2], [2, 2.2], [0, 0], [0, 0], [0, 0], [0, 0]]])
 
+  def test_edge_dropout(self):
+    (n_edge, edges, senders,
+     receivers) = graph_networks.GraphNet._edge_dropout(n_edge=4,
+                                                        edges=[
+                                                            [0.0, 0.0],
+                                                            [1.0, 1.0],
+                                                            [2.0, 2.0],
+                                                            [3.0, 3.0],
+                                                        ],
+                                                        senders=[0, 0, 0, 1],
+                                                        receivers=[1, 2, 3, 0],
+                                                        dropout_keep_prob=1.0)
+    self.assertAllEqual(n_edge, 4)
+    self.assertAllEqual(edges.shape, [4, 2])
+    self.assertAllEqual(senders.shape, [4])
+    self.assertAllEqual(receivers.shape, [4])
+
+  def test_edge_dropout_half(self):
+    (n_edge, edges, senders,
+     receivers) = graph_networks.GraphNet._edge_dropout(n_edge=4,
+                                                        edges=[
+                                                            [0.0, 0.0],
+                                                            [1.0, 1.0],
+                                                            [2.0, 2.0],
+                                                            [3.0, 3.0],
+                                                        ],
+                                                        senders=[0, 0, 0, 1],
+                                                        receivers=[1, 2, 3, 0],
+                                                        dropout_keep_prob=0.5)
+    self.assertAllEqual(n_edge, 2)
+    self.assertAllEqual(edges.shape, [2, 2])
+    self.assertAllEqual(senders.shape, [2])
+    self.assertAllEqual(receivers.shape, [2])
+
+    (n_edge, edges, senders,
+     receivers) = graph_networks.GraphNet._edge_dropout(n_edge=4,
+                                                        edges=[
+                                                            [0.0, 0.0],
+                                                            [1.0, 1.0],
+                                                            [2.0, 2.0],
+                                                            [3.0, 3.0],
+                                                        ],
+                                                        senders=[0, 0, 0, 1],
+                                                        receivers=[1, 2, 3, 0],
+                                                        dropout_keep_prob=0.5)
+    self.assertAllEqual(n_edge, 2)
+    self.assertAllEqual(edges.shape, [2, 2])
+    self.assertAllEqual(senders.shape, [2])
+    self.assertAllEqual(receivers.shape, [2])
+
   def test_self_attention(self):
     options_str = r"""
       self_attention {
