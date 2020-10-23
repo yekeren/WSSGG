@@ -61,50 +61,6 @@ from object_detection.core import standard_fields
 from model_utils.scene_graph_evaluation import SceneGraphEvaluator
 
 
-class SelfAttentionEx(_base.AbstractModule):
-
-  def __init__(self, name='self_attention_ex'):
-    super(SelfAttentionEx, self).__init__(name=name)
-    self._normalizer = modules._unsorted_segment_softmax
-
-  def _build(self, node_values, node_keys, node_queries, edge_values, edge_keys,
-             edge_queries, input_graph):
-    # Sender nodes put their keys and values in the edges.
-    # [total_num_edges, num_heads, query_size].
-    sender_keys = blocks.broadcast_sender_nodes_to_edges(
-        input_graph.replace(nodes=node_keys))
-    sender_values = blocks.broadcast_sender_nodes_to_edges(
-        input_graph.replace(nodes=node_values))
-
-    sender_keys += edge_keys
-    sender_values += edge_values
-
-    # Receiver nodes put their queries in the edges.
-    # [total_num_edges, num_heads, query_size].
-    receiver_queries = blocks.broadcast_receiver_nodes_to_edges(
-        input_graph.replace(nodes=node_queries))
-
-    # Attention weight for each edge.
-    # [total_num_edges, num_heads]
-    attention_weights_logits = tf.reduce_sum(sender_keys * receiver_queries,
-                                             axis=-1)
-    normalized_attention_weight = modules._received_edges_normalizer(
-        input_graph.replace(edges=attention_weights_logits),
-        normalizer=self._normalizer)
-
-    # Attending to sender values according to the weights.
-    # [total_num_edges, num_heads, embedding_size]
-    attended_edges = sender_values * normalized_attention_weight[..., None]
-
-    # Summing all of the attended values from each node.
-    # [total_num_nodes, num_heads, embedding_size]
-    received_edges_aggregator = blocks.ReceivedEdgesToNodesAggregator(
-        reducer=tf.math.unsorted_segment_sum)
-    aggregated_attended_values = received_edges_aggregator(
-        input_graph.replace(edges=attended_edges))
-    return input_graph.replace(nodes=aggregated_attended_values)
-
-
 class WSSceneGraphGNet(model_base.ModelBase):
   """WSSceneGraphGNet model to provide instance-level annotations. """
 
@@ -120,11 +76,16 @@ class WSSceneGraphGNet(model_base.ModelBase):
       meta = json.load(fid)
       (entity2id, predicate2id) = (meta['label_to_idx'],
                                    meta['predicate_to_idx'])
+
+    categories = []
     id2entity = {}
     id2predicate = {}
     for key in entity2id.keys():
       entity2id[key] -= 1
       id2entity[entity2id[key]] = key
+      categories.append({'id': entity2id[key], 'name': key})
+    self.entity_categories = categories
+
     for key in predicate2id.keys():
       predicate2id[key] -= 1
       id2predicate[predicate2id[key]] = key
@@ -449,7 +410,7 @@ class WSSceneGraphGNet(model_base.ModelBase):
       graph_relation_scores = graph_relation_scores[:, :, 1:]
 
       # Search for the triple proposals.
-      search = GraphNMS(
+      triple_proposal = GraphNMS(
           n_proposal=n_proposal,
           proposals=proposals,
           proposal_scores=graph_proposal_scores,
@@ -464,17 +425,36 @@ class WSSceneGraphGNet(model_base.ModelBase):
           use_log_prob=self.options.use_log_prob)
 
       predictions.update({
-          'search/n_triple': search.n_triple,
-          'search/subject': self.id2entity(search.subject_id),
-          'search/subject/score': search.subject_score,
-          'search/subject/box': search.get_subject_box(proposals),
-          'search/subject/box_index': search.subject_proposal_index,
-          'search/object': self.id2entity(search.object_id),
-          'search/object/score': search.object_score,
-          'search/object/box': search.get_object_box(proposals),
-          'search/object/box_index': search.object_proposal_index,
-          'search/predicate': self.id2predicate(search.predicate_id),
-          'search/predicate/score': search.predicate_score,
+          'object_detection/num_detections':
+              triple_proposal.num_detections,
+          'object_detection/detection_boxes':
+              triple_proposal.detection_boxes,
+          'object_detection/detection_scores':
+              triple_proposal.detection_scores,
+          'object_detection/detection_classes':
+              triple_proposal.detection_classes,
+          'triple_proposal/n_triple':
+              triple_proposal.n_triple,
+          'triple_proposal/subject':
+              self.id2entity(triple_proposal.subject_id),
+          'triple_proposal/subject/score':
+              triple_proposal.subject_score,
+          'triple_proposal/subject/box':
+              triple_proposal.get_subject_box(proposals),
+          'triple_proposal/subject/box_index':
+              triple_proposal.subject_proposal_index,
+          'triple_proposal/object':
+              self.id2entity(triple_proposal.object_id),
+          'triple_proposal/object/score':
+              triple_proposal.object_score,
+          'triple_proposal/object/box':
+              triple_proposal.get_object_box(proposals),
+          'triple_proposal/object/box_index':
+              triple_proposal.object_proposal_index,
+          'triple_proposal/predicate':
+              self.id2predicate(triple_proposal.predicate_id),
+          'triple_proposal/predicate/score':
+              triple_proposal.predicate_score,
       })
 
     return predictions
@@ -740,61 +720,19 @@ class WSSceneGraphGNet(model_base.ModelBase):
     Returns:
       token_embeddings: A [batch, max_n_token, dims] float tensor.
     """
-    regularizer = hyperparams._build_slim_regularizer(
-        self.options.fc_hyperparams.regularizer)
+    # regularizer = hyperparams._build_slim_regularizer(
+    #     self.options.fc_hyperparams.regularizer)
+    regularizer = None
 
     with tf.variable_scope(scope):
       embedding_weights = tf.get_variable('embeddings',
                                           initializer=initializer,
-                                          regularizer=regularizer,
+                                          regularizer=None,
                                           trainable=trainable)
     embeddings = tf.nn.embedding_lookup(embedding_weights,
                                         tokens,
                                         max_norm=max_norm)
     return embeddings
-
-  def _extended_self_attention(self,
-                               graphs_tuple,
-                               node_queries,
-                               node_keys,
-                               node_values,
-                               edge_queries,
-                               edge_keys,
-                               edge_values,
-                               num_heads=1):
-    """Uses self-attention to update graph node embeddings.
-
-    Args:
-      graphs_tuple: A GraphTuple object containing the connectivity info.
-      node_queries: A [total_n_node, key_dims] float tensor.
-      node_keys: A [total_n_node, key_dims] float tensor.
-      node_values: A [total_n_node, value_dims] float tensor.
-      edge_queries: A [total_n_edge, key_dims] float tensor.
-      edge_keys: A [total_n_edge, key_dims] float tensor.
-      edge_values: A [total_n_edge, value_dims] float tensor.
-
-    Returns:
-      output_graphs_tuple: A GraphTuple object containing both the 
-        connectivity and node embeddings.
-    """
-    key_size = node_keys.shape[-1].value // num_heads
-    value_size = node_values.shape[-1].value // num_heads
-
-    node_queries = tf.reshape(node_queries, [-1, num_heads, key_size])
-    node_keys = tf.reshape(node_keys, [-1, num_heads, key_size])
-    node_values = tf.reshape(node_values, [-1, num_heads, value_size])
-
-    edge_queries = tf.reshape(edge_queries, [-1, num_heads, key_size])
-    edge_keys = tf.reshape(edge_keys, [-1, num_heads, key_size])
-    edge_values = tf.reshape(edge_values, [-1, num_heads, value_size])
-
-    graph_network = SelfAttentionEx()
-    for _ in range(self.options.num_tgnet_layers):
-      graphs_tuple = graph_network(node_values, node_keys, node_queries,
-                                   edge_values, edge_keys, edge_queries,
-                                   graphs_tuple)
-    nodes = tf.reshape(graphs_tuple.nodes, [-1, num_heads * value_size])
-    return graphs_tuple.replace(nodes=nodes)
 
   def build_losses(self, inputs, predictions, **kwargs):
     """Computes loss tensors.
@@ -824,25 +762,28 @@ class WSSceneGraphGNet(model_base.ModelBase):
     receivers = inputs['scene_pseudo_graph/receivers']
 
     # Using graph network to update node and edge embeddings.
+    max_norm = None
+    if self.options.HasField('graph_initial_embedding_max_norm'):
+      max_norm = self.options.graph_initial_embedding_max_norm
+
     node_embs = self._compute_initial_embeddings(
         self.entity2id(nodes),
         initializer=self.entity_emb_weights,
         scope='tgnet/node/embeddings',
-        trainable=False)
+        max_norm=max_norm,
+        trainable=self.options.train_graph_initial_embedding)
     edge_embs = self._compute_initial_embeddings(
         self.predicate2id(edges),
         initializer=self.predicate_emb_weights,
         scope='tgnet/edge/embeddings',
-        trainable=False)
+        max_norm=max_norm,
+        trainable=self.options.train_graph_initial_embedding)
 
     tgnet = graph_networks.build_graph_network(self.options.text_graph_network,
                                                is_training=self.is_training)
     with slim.arg_scope(self.arg_scope_fn()):
       updated_node_embs, updated_edge_embs = tgnet.compute_graph_embeddings(
           n_node, n_edge, node_embs, edge_embs, senders, receivers)
-
-    # node_embs = self._compute_graph_embeddings(n_node, n_edge, nodes, edges,
-    #                                            senders, receivers)
 
     # Parse triplets from pseudo graph.
     (n_triple, subject_ids, object_ids, predicate_ids, subject_text_embs,
@@ -920,9 +861,12 @@ class WSSceneGraphGNet(model_base.ModelBase):
           labels=pseudo_instance_labels,
           logits=predictions['refinement/iter_%i/proposal_logits' % i])
 
+      enable_loss = tf.cast(
+          tf.train.get_or_create_global_step() >=
+          (i + 1) * self.options.sage_steps, tf.float32)
+      loss_weight = enable_loss * self.options.proposal_refine_loss_weight
       loss_dict.update({
-          'losses/sgr_proposal_loss_%i' % i:
-              self.options.proposal_refine_loss_weight * sgr_proposal_loss,
+          'losses/sgr_proposal_loss_%i' % i: loss_weight * sgr_proposal_loss,
       })
       proposal_scores_0 = predictions['refinement/iter_%i/proposal_probas' % i]
       proposal_scores_0 = proposal_scores_0[:, :, 1:]
@@ -942,10 +886,14 @@ class WSSceneGraphGNet(model_base.ModelBase):
         max_n_proposal=max_n_proposal,
         labels=pseudo_relation_labels,
         logits=predictions['refinement/relation_logits'])
-    loss_dict.update({
-        'losses/sgr_relation_loss_%i' % i:
-            self.options.relation_refine_loss_weight * sgr_relation_loss
-    })
+
+    enable_loss = tf.cast(
+        tf.train.get_or_create_global_step() >=
+        (self.options.n_refine_iteration + 1) * self.options.sage_steps,
+        tf.float32)
+    loss_weight = enable_loss * self.options.relation_refine_loss_weight
+    loss_dict.update(
+        {'losses/sgr_relation_loss_%i' % i: loss_weight * sgr_relation_loss})
 
     return loss_dict
 
@@ -976,10 +924,6 @@ class WSSceneGraphGNet(model_base.ModelBase):
     n_triple = inputs['scene_graph/n_triple']
     max_n_triple = tf.shape(subject_ids)[1]
 
-    (subject_index, object_index,
-     predicate_index) = self._create_selection_indices(subject_ids, object_ids,
-                                                       predicate_ids)
-
     triple_mask = tf.sequence_mask(n_triple,
                                    maxlen=max_n_triple,
                                    dtype=tf.float32)
@@ -987,7 +931,7 @@ class WSSceneGraphGNet(model_base.ModelBase):
     gt_subject_box = inputs['scene_graph/subject/box']
     gt_object_box = inputs['scene_graph/object/box']
 
-    # Compute the classification accuracy.
+    # Compute the entity classification accuracy.
     subject_logits = predictions['pseudo/logits_entity_given_subject']
     object_logits = predictions['pseudo/logits_entity_given_object']
 
@@ -1000,55 +944,50 @@ class WSSceneGraphGNet(model_base.ModelBase):
       accuracy_metric.update_state(bingo)
       metric_dict[name] = accuracy_metric
 
-    # Compute pseudo box grounding performance.
-    iou_threshold = 0.5
-    for i in range(0, 1 + self.options.n_refine_iteration):
-      graph_proposal_scores = predictions['refinement/iter_%i/proposal_probas' %
-                                          i]
-      graph_relation_scores = predictions['refinement/relation_probas'][:, :,
-                                                                        1:]
-      if i > 0:
-        graph_proposal_scores = graph_proposal_scores[:, :, 1:]
-      mps = GraphMPS(
-          n_triple=n_triple,
-          n_proposal=n_proposal,
-          subject_to_proposal=tf.gather_nd(
-              tf.transpose(graph_proposal_scores, [0, 2, 1]), subject_index),
-          proposal_to_proposal=tf.reshape(
-              tf.gather_nd(tf.transpose(graph_relation_scores, [0, 2, 1]),
-                           predicate_index),
-              [batch, max_n_triple, max_n_proposal, max_n_proposal]),
-          proposal_to_object=tf.gather_nd(
-              tf.transpose(graph_proposal_scores, [0, 2, 1]), object_index),
-          subject_to_proposal_weight=1.0,
-          proposal_to_proposal_weight=1.0,
-          proposal_to_object_weight=1.0,
-          use_log_prob=self.options.use_log_prob)
+    # Compute the object detection metrics.
+    eval_dict = {
+        'key':
+            inputs['id'],
+        'num_groundtruth_boxes_per_image':
+            inputs['scene_graph/n_triple'],
+        'groundtruth_classes':
+            subject_ids,
+        'groundtruth_boxes':
+            inputs['scene_graph/subject/box'],
+        'num_det_boxes_per_image':
+            predictions['object_detection/num_detections'],
+        'detection_boxes':
+            predictions['object_detection/detection_boxes'],
+        'detection_scores':
+            predictions['object_detection/detection_scores'],
+        'detection_classes':
+            predictions['object_detection/detection_classes'],
+    }
+    det_evaluator = coco_evaluation.CocoDetectionEvaluator(
+        categories=self.entity_categories)
+    det_metrics = det_evaluator.get_estimator_eval_metric_ops(eval_dict)
+    metric_dict.update({
+        'metrics/subject_detection/recall@100':
+            det_metrics['DetectionBoxes_Recall/AR@100'],
+        'metrics/subject_detection/mAP@0.50IOU':
+            det_metrics['DetectionBoxes_Precision/mAP@.50IOU'],
+    })
 
-      subject_iou = box_ops.iou(gt_subject_box, mps.get_subject_box(proposals))
-      object_iou = box_ops.iou(gt_object_box, mps.get_object_box(proposals))
+    eval_dict.update({
+        'groundtruth_classes': object_ids,
+        'groundtruth_boxes': inputs['scene_graph/object/box'],
+    })
+    det_evaluator = coco_evaluation.CocoDetectionEvaluator(
+        categories=self.entity_categories)
+    det_metrics = det_evaluator.get_estimator_eval_metric_ops(eval_dict)
+    metric_dict.update({
+        'metrics/object_detection/recall@100':
+            det_metrics['DetectionBoxes_Recall/AR@100'],
+        'metrics/object_detection/mAP@0.50IOU':
+            det_metrics['DetectionBoxes_Precision/mAP@.50IOU'],
+    })
 
-      recalled_subject = tf.greater_equal(subject_iou, iou_threshold)
-      recalled_object = tf.greater_equal(object_iou, iou_threshold)
-      recalled_relation = tf.logical_and(recalled_subject, recalled_object)
-
-      for name, value in [
-          ('metrics@%i/pseudo/iou/subject' % i, subject_iou),
-          ('metrics@%i/pseudo/iou/object' % i, object_iou),
-          ('metrics@%i/pseudo/recall/subject@%.2lf' % (i, iou_threshold),
-           recalled_subject),
-          ('metrics@%i/pseudo/recall/object@%.2lf' % (i, iou_threshold),
-           recalled_object),
-          ('metrics@%i/pseudo/recall/relation@%.2lf' % (i, iou_threshold),
-           recalled_relation)
-      ]:
-        mean_metric = tf.keras.metrics.Mean()
-        value = tf.cast(value, tf.float32)
-        mean_value = tf.reduce_mean(
-            masked_ops.masked_avg(value, mask=triple_mask, dim=1))
-        mean_metric.update_state(mean_value)
-        metric_dict[name] = mean_metric
-
+    # Compute the scene graph generation metrics.
     eval_dict = {
         'image_id': inputs['id'],
         'groundtruth/n_triple': inputs['scene_graph/n_triple'],
@@ -1057,16 +996,16 @@ class WSSceneGraphGNet(model_base.ModelBase):
         'groundtruth/object': inputs['scene_graph/object'],
         'groundtruth/object/box': inputs['scene_graph/object/box'],
         'groundtruth/predicate': inputs['scene_graph/predicate'],
-        'prediction/n_triple': predictions['search/n_triple'],
-        'prediction/subject/box': predictions['search/subject/box'],
-        'prediction/object/box': predictions['search/object/box'],
-        'prediction/subject': predictions['search/subject'],
-        'prediction/object': predictions['search/object'],
-        'prediction/predicate': predictions['search/predicate'],
+        'prediction/n_triple': predictions['triple_proposal/n_triple'],
+        'prediction/subject/box': predictions['triple_proposal/subject/box'],
+        'prediction/object/box': predictions['triple_proposal/object/box'],
+        'prediction/subject': predictions['triple_proposal/subject'],
+        'prediction/object': predictions['triple_proposal/object'],
+        'prediction/predicate': predictions['triple_proposal/predicate'],
     }
 
-    evaluator = SceneGraphEvaluator()
-    for k, v in evaluator.get_estimator_eval_metric_ops(eval_dict).items():
+    sg_evaluator = SceneGraphEvaluator()
+    for k, v in sg_evaluator.get_estimator_eval_metric_ops(eval_dict).items():
       metric_dict['metrics/midn/%s' % k] = v
     metric_dict['metrics/accuracy'] = metric_dict[
         'metrics/midn/scene_graph_recall@100']
