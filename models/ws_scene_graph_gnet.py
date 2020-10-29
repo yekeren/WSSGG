@@ -783,7 +783,15 @@ class WSSceneGraphGNet(model_base.ModelBase):
                                                is_training=self.is_training)
     with slim.arg_scope(self.arg_scope_fn()):
       updated_node_embs, updated_edge_embs = tgnet.compute_graph_embeddings(
-          n_node, n_edge, node_embs, edge_embs, senders, receivers)
+          n_node,
+          n_edge,
+          node_embs,
+          edge_embs,
+          senders,
+          receivers,
+          regularizer=hyperparams._build_slim_regularizer(
+              self.options.fc_hyperparams.regularizer),
+      )
 
     # Parse triplets from pseudo graph.
     (n_triple, subject_ids, object_ids, predicate_ids, subject_text_embs,

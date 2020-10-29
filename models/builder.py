@@ -19,10 +19,12 @@ from __future__ import print_function
 
 from protos import model_pb2
 from models.ws_scene_graph import WSSceneGraph
+from models.ws_scene_graph_gnet import WSSceneGraphGNet
 from models.ws_scene_graph_rnn_refine import WSSceneGraphRnnRefine
 
 MODELS = {
     model_pb2.WSSceneGraph.ext: WSSceneGraph,
+    model_pb2.WSSceneGraphGNet.ext: WSSceneGraphGNet,
     model_pb2.WSSceneGraphRnnRefine.ext: WSSceneGraphRnnRefine,
 }
 

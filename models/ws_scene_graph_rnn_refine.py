@@ -44,20 +44,41 @@ from modeling.utils import box_ops
 from modeling.utils import hyperparams
 from modeling.utils import masked_ops
 
-from models import ws_scene_graph
+from model_utils.scene_graph_evaluation import SceneGraphEvaluator
 from models import utils
+from models import model_base
+from models import ws_scene_graph_gnet
 
 from object_detection.metrics import coco_evaluation
 from object_detection.core import standard_fields
 
 from bert.modeling import transformer_model
 
-from metrics.scene_graph_evaluation import SceneGraphEvaluator
 from protos import model_pb2
 
 
-class WSSceneGraphRnnRefine(ws_scene_graph.WSSceneGraph):
+class WSSceneGraphRnnRefine(model_base.ModelBase):
   """WSSceneGraphRnnRefine model to provide instance-level annotations. """
+
+  def __init__(self, options, is_training):
+    """Constructs the WSSceneGraphGNet instance. """
+    super(WSSceneGraphRnnRefine, self).__init__(options, is_training)
+
+    self._proposal_network = ws_scene_graph_gnet.WSSceneGraphGNet(
+        options.proposal_network, is_training)
+
+    self.arg_scope_fn = self._proposal_network.arg_scope_fn
+
+    self.n_entity = self._proposal_network.n_entity
+    self.n_predicate = self._proposal_network.n_predicate
+
+    self.entity2id = self._proposal_network.entity2id
+    self.id2entity = self._proposal_network.id2entity
+    self.predicate2id = self._proposal_network.predicate2id
+    self.id2predicate = self._proposal_network.id2predicate
+
+    self.entity_emb_weights = self._proposal_network.entity_emb_weights
+    self.predicate_emb_weights = self._proposal_network.predicate_emb_weights
 
   def _extract_relation_feature(self, subject_box, subject_feature, object_box,
                                 object_feature):
@@ -383,7 +404,7 @@ class WSSceneGraphRnnRefine(ws_scene_graph.WSSceneGraph):
     Returns:
       predictions: A dictionary of prediction tensors keyed by name.
     """
-    predictions = super(WSSceneGraphRnnRefine, self).predict(inputs)
+    predictions = self._proposal_network.predict(inputs)
 
     n_proposal = inputs['image/n_proposal']
     proposals = inputs['image/proposal']
@@ -396,31 +417,34 @@ class WSSceneGraphRnnRefine(ws_scene_graph.WSSceneGraph):
 
     # Post-process the predictions.
     if not self.is_training:
-      graph_proposal_scores = predictions['refinement/iter_%i/proposal_probas' %
-                                          self.options.n_refine_iteration]
+      graph_proposal_scores = predictions[
+          'refinement/iter_%i/proposal_probas' %
+          self.options.proposal_network.n_refine_iteration]
       graph_relation_scores = predictions['refinement/relation_probas']
       graph_proposal_scores = graph_proposal_scores[:, :, 1:]
       graph_relation_scores = graph_relation_scores[:, :, 1:]
 
       # Search for the triple proposals.
-      search_n_triple = predictions['search/n_triple']
-      search_subject_proposal_index = predictions['search/subject/box_index']
-      search_object_proposal_index = predictions['search/object/box_index']
+      first_stage_n_triple = predictions['triple_proposal/n_triple']
+      first_stage_subject_proposal_index = predictions[
+          'triple_proposal/subject/box_index']
+      first_stage_object_proposal_index = predictions[
+          'triple_proposal/object/box_index']
 
       # Beam search.
       # - accum_log_probs = [batch, max_n_triple, beam_size].
       # - sub_ids, obj_ids, pred_ids = [batch, max_n_triple, beam_size].
       (accum_log_probs, sub_ids, sub_log_probs, obj_ids, obj_log_probs,
        pred_ids, pred_log_probs) = self._beam_search_refine_triple(
-           search_n_triple,
+           first_stage_n_triple,
            subject_box=graph_nms.GraphNMS._gather_proposal_by_index(
-               proposals, search_subject_proposal_index),
+               proposals, first_stage_subject_proposal_index),
            subject_feature=graph_nms.GraphNMS._gather_proposal_by_index(
-               shared_hiddens, search_subject_proposal_index),
+               shared_hiddens, first_stage_subject_proposal_index),
            object_box=graph_nms.GraphNMS._gather_proposal_by_index(
-               proposals, search_object_proposal_index),
+               proposals, first_stage_object_proposal_index),
            object_feature=graph_nms.GraphNMS._gather_proposal_by_index(
-               shared_hiddens, search_object_proposal_index),
+               shared_hiddens, first_stage_object_proposal_index),
            rnn_layers=self.options.rnn_layers,
            num_units=self.options.rnn_hidden_units,
            beam_size=self.options.beam_size)
@@ -437,13 +461,11 @@ class WSSceneGraphRnnRefine(ws_scene_graph.WSSceneGraph):
 
       (n_valid_example, accum_log_probs, sub, sub_score, sub_box, pred,
        pred_score, obj, obj_score, obj_box) = utils.beam_search_post_process(
-           search_n_triple,
-           # search_subject_proposal_index,
+           first_stage_n_triple,
            graph_nms.GraphNMS._gather_proposal_by_index(
-               proposals, search_subject_proposal_index),
-           # search_object_proposal_index,
+               proposals, first_stage_subject_proposal_index),
            graph_nms.GraphNMS._gather_proposal_by_index(
-               proposals, search_object_proposal_index),
+               proposals, first_stage_object_proposal_index),
            accum_log_probs,
            sub_ids,
            tf.exp(sub_log_probs),
@@ -587,8 +609,7 @@ class WSSceneGraphRnnRefine(ws_scene_graph.WSSceneGraph):
     Returns:
       loss_dict: A dictionary of loss tensors keyed by names.
     """
-    loss_dict = super(WSSceneGraphRnnRefine,
-                      self).build_losses(inputs, predictions)
+    loss_dict = self._proposal_network.build_losses(inputs, predictions)
 
     subject_ids = self.entity2id(inputs['scene_graph/subject'])
     object_ids = self.entity2id(inputs['scene_graph/object'])
@@ -606,17 +627,16 @@ class WSSceneGraphRnnRefine(ws_scene_graph.WSSceneGraph):
 
     # Build RNN to contextualizing label generation process.
     (subject_index, object_index,
-     predicate_index) = self._create_selection_indices(subject_ids, object_ids,
-                                                       predicate_ids)
+     predicate_index) = self._proposal_network._create_selection_indices(
+         subject_ids, object_ids, predicate_ids)
 
-    proposal_scores_0 = predictions['refinement/iter_%i/proposal_probas' %
-                                    self.options.n_refine_iteration][:, :, 1:]
+    proposal_scores_0 = predictions[
+        'refinement/iter_%i/proposal_probas' %
+        self.options.proposal_network.n_refine_iteration][:, :, 1:]
     relation_scores_0 = predictions['refinement/relation_probas'][:, :, 1:]
 
-    proposal_to_proposal_weight = slim.dropout(
-        self.options.joint_inferring_relation_weight,
-        self.options.mps_relation_dropout_keep_prob,
-        is_training=self.is_training)
+    proposal_to_proposal_weight = self.options.proposal_network.joint_inferring_relation_weight
+
     mps = GraphMPS(n_triple=n_triple,
                    n_proposal=n_proposal,
                    subject_to_proposal=tf.gather_nd(
@@ -630,7 +650,7 @@ class WSSceneGraphRnnRefine(ws_scene_graph.WSSceneGraph):
                        tf.transpose(proposal_scores_0, [0, 2, 1]),
                        object_index),
                    proposal_to_proposal_weight=proposal_to_proposal_weight,
-                   use_log_prob=self.options.use_log_prob)
+                   use_log_prob=self.options.proposal_network.use_log_prob)
 
     loss_dict.update(
         self._compute_triple_refine_losses(
@@ -661,8 +681,7 @@ class WSSceneGraphRnnRefine(ws_scene_graph.WSSceneGraph):
         results of calling a metric function, namely a (metric_tensor, 
         update_op) tuple. see tf.metrics for details.
     """
-    metric_dict = super(WSSceneGraphRnnRefine,
-                        self).build_metrics(inputs, predictions)
+    metric_dict = self._proposal_network.build_metrics(inputs, predictions)
 
     eval_dict = {
         'image_id': inputs['id'],
