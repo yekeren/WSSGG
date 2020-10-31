@@ -63,6 +63,10 @@ class GraphNMS(object):
          use_class_agnostic_nms=use_class_agnostic_nms,
          score_thresh=score_thresh)
 
+    self.num_detections = num_detections
+    self.detection_boxes = detection_boxes
+    self.detection_scores = detection_scores
+    self.detection_classes = detection_classes
     self.detection_indices = detection_indices
 
     def _py_per_image_relation_search(num_detections, detection_indices,

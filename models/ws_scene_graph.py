@@ -43,13 +43,12 @@ from modeling.utils import box_ops
 from modeling.utils import hyperparams
 from modeling.utils import masked_ops
 
+from model_utils.scene_graph_evaluation import SceneGraphEvaluator
 from models import model_base
 from models import utils
 
 from object_detection.metrics import coco_evaluation
 from object_detection.core import standard_fields
-
-from metrics.scene_graph_evaluation import SceneGraphEvaluator
 
 
 class WSSceneGraph(model_base.ModelBase):
@@ -95,27 +94,6 @@ class WSSceneGraph(model_base.ModelBase):
     # Initialize the arg_scope for FC layers.
     self.arg_scope_fn = hyperparams.build_hyperparams(options.fc_hyperparams,
                                                       is_training)
-
-  def _spatial_relation_feature(self, n_proposal, proposals):
-    """Extracts spatial relation feature for any two proposal nodes.
-
-    Args:
-      n_proposal: A [batch] int tensor.
-      proposals: A [batch, max_n_proposal, 4] float tensor.
-
-    Returns:
-      A [batch, max_n_proposal, max_n_proposal, relation_dims] float tensor.
-    """
-    batch = proposals.shape[0].value
-    max_n_proposal = tf.shape(proposals)[1]
-
-    proposals_broadcast1 = tf.broadcast_to(tf.expand_dims(
-        proposals, 2), [batch, max_n_proposal, max_n_proposal, 4])
-    proposals_broadcast2 = tf.broadcast_to(tf.expand_dims(
-        proposals, 1), [batch, max_n_proposal, max_n_proposal, 4])
-
-    return utils.compute_spatial_relation_feature(proposals_broadcast1,
-                                                  proposals_broadcast2)
 
   def _relation_classification(self, n_proposal, proposals, proposal_features):
     """Classifies relations given the proposal features.
