@@ -130,14 +130,14 @@ def _create_scenegraphs_from_captions(caption_annotations_file,
     thr.join()
 
   # Merge scene graphs.
-  for i, image in enumerate(images):
-    thr_id = i % FLAGS.number_of_threads
-    image_with_sg = splits[thr_id][i // FLAGS.number_of_threads]
-    assert image['id'] == image_with_sg['id']
-    image['scene_graphs'] = image_with_sg['scene_graphs']
-
   with tf.io.gfile.GFile(scenegraph_annotations_file, 'w') as fid:
-    json.dump(images, fid)
+    for i, image in enumerate(images):
+      thr_id = i % FLAGS.number_of_threads
+      image_with_sg = splits[thr_id][i // FLAGS.number_of_threads]
+      assert image['id'] == image_with_sg['id']
+      image['scene_graphs'] = image_with_sg['scene_graphs']
+
+      fid.write(json.dumps(image) + '\n')
 
 
 def main(_):

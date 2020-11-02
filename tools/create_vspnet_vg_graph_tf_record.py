@@ -33,7 +33,7 @@ from modeling.utils.box_ops import py_iou
 
 flags.DEFINE_string('split_pkl_file', '',
                     'Pickle file denoting the train/test splits.')
-flags.DEFINE_integer('num_val_examples', 5000,
+flags.DEFINE_integer('num_val_examples', 1000,
                      'Number of examples for validation.')
 flags.DEFINE_string('proposal_coord_pkl_file', '',
                     'Pickle file storing proposal coordinates.')

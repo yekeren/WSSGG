@@ -25,9 +25,15 @@ import os
 import json
 import lmdb
 import pickle
+import gc
 
 import numpy as np
 import tensorflow as tf
+from graph_nets import utils_np
+
+from modeling.utils.box_ops import py_iou
+
+gc.disable()
 
 flags.DEFINE_string('split_pkl_file', '',
                     'Pickle file denoting the train/test splits.')
@@ -39,6 +45,8 @@ flags.DEFINE_string('proposal_feature_lmdb_file', '',
                     'LMDB file storing proposal feature.')
 flags.DEFINE_string('scene_graph_pkl_file', '',
                     'Pickle file storing scene graphs annotations.')
+flags.DEFINE_string('caption_graph_json_file', '',
+                    'JSON file storing caption graphs annotations.')
 flags.DEFINE_string('embedding_pkl_file', '',
                     'Path to the file storing entity/predicate embeddings.')
 flags.DEFINE_string('output_directory', '', 'Path to the output directory')
@@ -65,11 +73,9 @@ def _read_proposal_features(image_id, txn):
   return proposal_features.reshape((-1, _FEATURE_DIMS))
 
 
-def _create_tf_example(image_id,
-                       proposals,
-                       proposal_features,
-                       scene_graph_triples,
-                       training_split=False):
+def _create_tf_example(image_id, proposals, proposal_features,
+                       scene_graph_triples, scene_graph_ideal_graph,
+                       scene_graph_text_graph):
   """Creates tf example.
 
   Args:
@@ -78,7 +84,8 @@ def _create_tf_example(image_id,
     proposal_features: A [num_proposals, _FEATURE_DIMS] nparray.
     scene_graph_triples: A list of scene graph triples, including the following
       keys: `subject`, `object`, `predicate`, `subject_box`, `object_box`.
-    training_split: If true, run de-duplicate for the training split.
+    scene_graph_ideal_graph: A dict containing graph-like data, including the 
+      following keys: `n_node`, `n_edge`, `nodes`, `edges`, `senders`, `receivers`.
 
   Returns:
     tf_example: A tf.train.Example proto.
@@ -125,16 +132,10 @@ def _create_tf_example(image_id,
           _float_feature_list(proposal_features.flatten().tolist()),
   }
 
-  # Encode ground-truth scene graphs.
-  dedup_set = set()
+  # Encode ground-truth scene graph triples.
   subjects, predicates, objects = [], [], []
   subject_boxes, object_boxes = [], []
   for triple in scene_graph_triples:
-    if training_split and (triple['subject'], triple['predicate'],
-                           triple['object']) in dedup_set:
-      continue
-    dedup_set.add((triple['subject'], triple['predicate'], triple['object']))
-
     subjects.append(triple['subject'])
     predicates.append(triple['predicate'])
     objects.append(triple['object'])
@@ -149,6 +150,7 @@ def _create_tf_example(image_id,
     subject_boxes, object_boxes = (np.zeros((0, 4)), np.zeros((0, 4)))
 
   feature_dict.update({
+      # Triplet.
       'scene_graph/n_triple':
           _int64_feature(len(subjects)),
       'scene_graph/subject':
@@ -175,6 +177,38 @@ def _create_tf_example(image_id,
           _float_feature_list(object_boxes[:, 3].tolist()),
       'scene_graph/object/bbox/xmax':
           _float_feature_list(object_boxes[:, 2].tolist()),
+      # Scene pseudo graph.
+      'scene_pseudo_graph/n_node':
+          _int64_feature(scene_graph_ideal_graph['n_node']),
+      'scene_pseudo_graph/n_edge':
+          _int64_feature(scene_graph_ideal_graph['n_edge']),
+      'scene_pseudo_graph/nodes':
+          _string_feature_list(scene_graph_ideal_graph['nodes']),
+      'scene_pseudo_graph/edges':
+          _string_feature_list(scene_graph_ideal_graph['edges']),
+      'scene_pseudo_graph/senders':
+          _int64_feature_list(scene_graph_ideal_graph['senders']),
+      'scene_pseudo_graph/receivers':
+          _int64_feature_list(scene_graph_ideal_graph['receivers']),
+      # Caption pseudo graph.
+      'scene_text_graph/caption':
+          _string_feature_list(scene_graph_text_graph['caption']),
+      'scene_text_graph/n_entity':
+          _int64_feature_list(scene_graph_text_graph['n_entity']),
+      'scene_text_graph/n_relation':
+          _int64_feature_list(scene_graph_text_graph['n_relation']),
+      'scene_text_graph/n_node':
+          _int64_feature_list(scene_graph_text_graph['n_node']),
+      'scene_text_graph/n_edge':
+          _int64_feature_list(scene_graph_text_graph['n_edge']),
+      'scene_text_graph/nodes':
+          _string_feature_list(scene_graph_text_graph['nodes']),
+      'scene_text_graph/edges':
+          _string_feature_list(scene_graph_text_graph['edges']),
+      'scene_text_graph/senders':
+          _int64_feature_list(scene_graph_text_graph['senders']),
+      'scene_text_graph/receivers':
+          _int64_feature_list(scene_graph_text_graph['receivers']),
   })
 
   tf_example = tf.train.Example(features=tf.train.Features(
@@ -184,7 +218,7 @@ def _create_tf_example(image_id,
 
 def _create_tf_record_from_annotations(image_ids, id_to_proposals,
                                        id_to_scenegraph, txn, tf_record_file,
-                                       num_output_parts, training_split):
+                                       num_output_parts):
   """Creates tf record files.
 
   Args:
@@ -203,16 +237,21 @@ def _create_tf_record_from_annotations(image_ids, id_to_proposals,
     if image_id not in id_to_scenegraph:
       continue
 
-    scene_graph_triples = id_to_scenegraph[image_id]
+    scene_graph_triples = id_to_scenegraph[image_id]['triples']
+    scene_graph_ideal_graph = id_to_scenegraph[image_id]['ideal_graph']
+    scene_graph_text_graph = id_to_scenegraph[image_id]['text_graphs']
+
     proposals, proposal_features = (id_to_proposals[image_id],
                                     _read_proposal_features(image_id, txn))
     assert proposals.shape[0] == proposal_features.shape[0]
 
     tf_example = _create_tf_example(image_id, proposals, proposal_features,
-                                    scene_graph_triples, training_split)
+                                    scene_graph_triples,
+                                    scene_graph_ideal_graph,
+                                    scene_graph_text_graph)
     writers[i % num_output_parts].write(tf_example.SerializeToString())
 
-    if (i + 1) % 500 == 0:
+    if (i + 1) % 100 == 0:
       logging.info('On example %i/%i', i + 1, len(image_ids))
 
   for writer in writers:
@@ -220,11 +259,86 @@ def _create_tf_record_from_annotations(image_ids, id_to_proposals,
   logging.info('Processed %i examples.', len(image_ids))
 
 
-def _read_scene_graph_annotations_keyed_by_image_id(filename, scene_graph_meta):
+def _insert_entity(entity_names, entity_boxes, box, name):
+  for i in range(len(entity_names)):
+    if name == entity_names[i] and py_iou(box, entity_boxes[i]) > 0.5:
+      return i
+  entity_names.append(name)
+  entity_boxes.append(box)
+  return len(entity_names) - 1
+
+
+def _read_caption_graph_annotations_keyed_by_image_id(caption_graph_json_file):
+  """Reads caption scene graphs keyed by image id.
+
+  Args:
+    caption_graph_json_file: Path to the jsonl file generated using schuster's parser.
+
+  Returns:
+    A dict mapping image id to scene graphs.
+  """
+  sg_dict = {}
+  with tf.io.gfile.GFile(caption_graph_json_file, 'r') as fid:
+    for i, line in enumerate(fid):
+      data = json.loads(line)
+      data_dict_list = []
+      n_entity = []
+      n_relation = []
+      captions = []
+      for sg in data['scene_graphs']:
+        assert all((len(x['names']) == 1 for x in sg['objects']))
+
+        # Nodes (objects + attributes).
+        objects = [x['names'][0] for x in sg['objects']]
+        attributes = [x['attribute'] for x in sg['attributes']]
+        nodes = objects + attributes
+        captions.append(sg['phrase'])
+
+        n_entity.append(len(objects))
+        n_relation.append(len(sg['relationships']))
+
+        # Edges (relationships + attributes), bi-directional.
+        senders, receivers, edges = [], [], []
+        for r in sg['relationships']:
+          senders.append(r['subject'])
+          receivers.append(r['object'])
+          edges.append(r['predicate'])
+        for a_id, a in enumerate(sg['attributes']):
+          senders.append(a['subject'])
+          receivers.append(len(objects) + a_id)
+          edges.append(a['predicate'])
+        data_dict_list.append({
+            "nodes": nodes,
+            "edges": edges,
+            "senders": senders,
+            "receivers": receivers
+        })
+      graphs_tuple = utils_np.data_dicts_to_graphs_tuple(data_dict_list)
+      sg_dict[data['id']] = {
+          'text_graphs': {
+              'caption': captions,
+              'n_entity': n_entity,
+              'n_relation': n_relation,
+              'n_node': graphs_tuple.n_node,
+              'n_edge': graphs_tuple.n_edge,
+              'nodes': graphs_tuple.nodes,
+              'edges': graphs_tuple.edges,
+              'senders': graphs_tuple.senders,
+              'receivers': graphs_tuple.receivers,
+          }
+      }
+
+      if i % 5000 == 0:
+        logging.info('On image %i.', i)
+  return sg_dict
+
+
+def _read_scene_graph_annotations_keyed_by_image_id(scene_graph_pkl_file,
+                                                    scene_graph_meta):
   """Reads scene graphs keyed by image id.
 
   Args:
-    filename: Path to the scene graph annotations pickle file.
+    scene_graph_pkl_file: Path to the ground-truth scene graph annotations pickle file.
     scene_graph_meta: A meta structure provided by the VSPNET authors,
       it maps from type (an integer) to text labels.
 
@@ -233,7 +347,7 @@ def _read_scene_graph_annotations_keyed_by_image_id(filename, scene_graph_meta):
   """
   id_to_entity, id_to_predicate = (scene_graph_meta['idx_to_label'],
                                    scene_graph_meta['idx_to_predicate'])
-  with tf.io.gfile.GFile(filename, 'rb') as fid:
+  with tf.io.gfile.GFile(scene_graph_pkl_file, 'rb') as fid:
     sg_dict = pickle.load(fid)
 
   count = count_entity = count_triples = 0
@@ -253,6 +367,11 @@ def _read_scene_graph_annotations_keyed_by_image_id(filename, scene_graph_meta):
     count_entity += len(entity_label)
     count_triples += len(triples)
 
+    # Get the set of entities, merge overlapped entities.
+    entity_names, entity_boxes = [], []
+    predicate_names = []
+    sub_ent_ids, obj_ent_ids = [], []
+
     triple_annots = []
     for triple in triples:
       try:
@@ -271,7 +390,26 @@ def _read_scene_graph_annotations_keyed_by_image_id(filename, scene_graph_meta):
           'object': obj,
           'object_box': triple['object_box'],
       })
-    data[image_id] = triple_annots
+
+      sub_box = triple['subject_box']
+      obj_box = triple['object_box']
+      sub_ent_ids.append(
+          _insert_entity(entity_names, entity_boxes, sub_box, sub))
+      obj_ent_ids.append(
+          _insert_entity(entity_names, entity_boxes, obj_box, obj))
+      predicate_names.append(pred)
+
+    data[image_id] = {
+        'triples': triple_annots,
+        'ideal_graph': {
+            'n_node': len(entity_names),
+            'n_edge': len(triples),
+            'nodes': entity_names,
+            'edges': predicate_names,
+            'senders': sub_ent_ids,
+            'receivers': obj_ent_ids,
+        }
+    }
 
   logging.info('In total: %i objects, %i relationships, skipped %i.',
                count_entity, count_triples, skipped)
@@ -285,6 +423,7 @@ def main(_):
   assert FLAGS.proposal_coord_pkl_file, '`proposal_coord_pkl_file` missing.'
   assert FLAGS.proposal_feature_lmdb_file, '`proposal_feature_lmdb` missing.'
   assert FLAGS.scene_graph_pkl_file, '`scene_graph_pkl_file` missing.'
+  assert FLAGS.caption_graph_json_file, '`caption_graph_json_file` missing.'
   assert FLAGS.embedding_pkl_file, '`embedding_pkl_file` missing.'
   assert FLAGS.output_directory, '`output_directory` missing.'
 
@@ -321,8 +460,15 @@ def main(_):
   logging.info('Proposals: #=%i', len(id_to_proposals))
 
   # Load scene graphs.
+  id_to_scenegraph_ = _read_caption_graph_annotations_keyed_by_image_id(
+      FLAGS.caption_graph_json_file)
   id_to_scenegraph = _read_scene_graph_annotations_keyed_by_image_id(
       FLAGS.scene_graph_pkl_file, scene_graph_meta)
+  for key in id_to_scenegraph:
+    if key in id_to_scenegraph_:
+      id_to_scenegraph[key].update(id_to_scenegraph_[key])
+    else:
+      logging.warn('cannot find %s', key)
 
   # Generate tfrecord files.
   with lmdb.open(flags.FLAGS.proposal_feature_lmdb_file,
@@ -331,14 +477,14 @@ def main(_):
                  lock=False) as env:
     with env.begin() as txn:
       _create_tf_record_from_annotations(
-          test_ids, id_to_proposals, id_to_scenegraph, txn,
-          os.path.join(output_directory, 'test.tfrecord'), 5, False)
+          val_ids, id_to_proposals, id_to_scenegraph, txn,
+          os.path.join(output_directory, 'val.tfrecord'), 1)
       _create_tf_record_from_annotations(
           train_ids, id_to_proposals, id_to_scenegraph, txn,
-          os.path.join(output_directory, 'train.tfrecord'), 10, True)
+          os.path.join(output_directory, 'train.tfrecord'), 10)
       _create_tf_record_from_annotations(
-          val_ids, id_to_proposals, id_to_scenegraph, txn,
-          os.path.join(output_directory, 'val.tfrecord'), 1, False)
+          test_ids, id_to_proposals, id_to_scenegraph, txn,
+          os.path.join(output_directory, 'test.tfrecord'), 5)
 
   logging.info('Done')
 

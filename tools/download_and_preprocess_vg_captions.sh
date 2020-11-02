@@ -31,5 +31,5 @@ if [ ! -f "${raw_data}/scenegraphs.json" ]; then
     --logtostderr \
     --number_of_threads="20" \
     --caption_annotations_file="${raw_data}/region_descriptions.json" \
-    --output_file_path="${raw_data}/text_graphs.json"
+    --output_file_path="${raw_data}/text_graphs.jsonl"
 fi

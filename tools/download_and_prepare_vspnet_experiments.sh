@@ -53,6 +53,24 @@ if [ ! -d "${data_dir}/data/VG/xfeat_proposals/iresnet_oi_lowprop" ]; then
     -x "/" -d "${data_dir}/data/VG/xfeat_proposals/iresnet_oi_lowprop"
 fi
 
+if [ ! -d "${data_dir}/data/VG/xfeat_proposals/iresnet_oi" ]; then
+  mkdir -p "${data_dir}/data/VG/xfeat_proposals/iresnet_oi/xfeat_proposals_inresnet_float32_300x1536.lmdb"
+  cd "${data_dir}/data/VG/xfeat_proposals/iresnet_oi/"
+  download \
+    "https://www.dropbox.com/sh/eb60553z4md36x2/AAD-SfzJD9aXzZHurJTjuB8Ua/VG/xfeat_proposals/iresnet_oi/coords.pkl?dl=0" \
+    "." \
+    "coords.pkl"
+  download \
+    "https://www.dropbox.com/sh/eb60553z4md36x2/AABcFReJUxs6NSp4WHyaGmJca/VG/xfeat_proposals/iresnet_oi/xfeat_proposals_inresnet_float32_300x1536.lmdb/lock.mdb?dl=0" \
+    "xfeat_proposals_inresnet_float32_300x1536.lmdb/" \
+    "lock.mdb"
+  download \
+    "https://www.dropbox.com/sh/eb60553z4md36x2/AAANrJvebu-iDrhCWRFu-ELGa/VG/xfeat_proposals/iresnet_oi/xfeat_proposals_inresnet_float32_300x1536.lmdb/data.mdb?dl=0" \
+    "xfeat_proposals_inresnet_float32_300x1536.lmdb/" \
+    "data.mdb"
+  cd -
+fi
+
 # Download visual genome images.
 
 if [ ! -d "${data_dir}/images" ]; then
@@ -70,22 +88,82 @@ if [ ! -d "${data_dir}/images" ]; then
   find "${data_dir}/images/VG_100K_2/" -name "*.jpg" -exec mv {} "${data_dir}/images" \;
 fi
 
-# Prepare the tfrecord files for stanford setting.
+# ##########################################################
+# # Using triplets: 20 proposal setting.
+# ##########################################################
+# 
+# # Prepare the tfrecord files for hanwang setting.
+# 
+# python "tools/create_vspnet_vg_tf_record.py" \
+#   --split_pkl_file="${data_dir}/metadata/VG/hanwang/split.pkl" \
+#   --proposal_coord_pkl_file="${data_dir}/data/VG/xfeat_proposals/iresnet_oi_lowprop/coords.pkl" \
+#   --proposal_feature_lmdb_file="${data_dir}/data/VG/xfeat_proposals/iresnet_oi_lowprop/feats_float32_20x1536.lmdb" \
+#   --scene_graph_pkl_file="${data_dir}/metadata/VG/hanwang/sg.pkl" \
+#   --embedding_pkl_file="${data_dir}/metadata/VG/hanwang/class_embs.pkl" \
+#   --output_directory="${data_dir}/tfrecords/hanwang-dedup"
+# 
+# # Prepare the tfrecord files for stanford setting.
+# 
+# python "tools/create_vspnet_vg_tf_record.py" \
+#   --split_pkl_file="${data_dir}/metadata/VG/stanford/split_stanford.pkl" \
+#   --proposal_coord_pkl_file="${data_dir}/data/VG/xfeat_proposals/iresnet_oi_lowprop/coords.pkl" \
+#   --proposal_feature_lmdb_file="${data_dir}/data/VG/xfeat_proposals/iresnet_oi_lowprop/feats_float32_20x1536.lmdb" \
+#   --scene_graph_pkl_file="${data_dir}/metadata/VG/stanford/sg_stanford_with_duplicates.pkl" \
+#   --embedding_pkl_file="${data_dir}/metadata/VG/stanford/word_emb_stanford_2.pkl" \
+#   --output_directory="${data_dir}/tfrecords/stanford-dedup"
 
-python "tools/create_vspnet_vg_tf_record.py" \
-  --split_pkl_file="${data_dir}/metadata/VG/stanford/split_stanford.pkl" \
-  --proposal_coord_pkl_file="${data_dir}/data/VG/xfeat_proposals/iresnet_oi_lowprop/coords.pkl" \
-  --proposal_feature_lmdb_file="${data_dir}/data/VG/xfeat_proposals/iresnet_oi_lowprop/feats_float32_20x1536.lmdb" \
-  --scene_graph_pkl_file="${data_dir}/metadata/VG/stanford/sg_stanford_with_duplicates.pkl" \
-  --embedding_pkl_file="${data_dir}/metadata/VG/stanford/word_emb_stanford_2.pkl" \
-  --output_directory="${data_dir}/tfrecords/stanford"
+# ##########################################################
+# # Using triplets: 300 proposal setting.
+# ##########################################################
+# 
+# # Prepare the tfrecord files for hanwang300 setting.
+# 
+# python "tools/create_vspnet_vg_tf_record.py" \
+#   --split_pkl_file="${data_dir}/metadata/VG/hanwang/split.pkl" \
+#   --proposal_coord_pkl_file="${data_dir}/data/VG/xfeat_proposals/iresnet_oi/coords.pkl" \
+#   --proposal_feature_lmdb_file="${data_dir}/data/VG/xfeat_proposals/iresnet_oi/xfeat_proposals_inresnet_float32_300x1536.lmdb" \
+#   --scene_graph_pkl_file="${data_dir}/metadata/VG/hanwang/sg.pkl" \
+#   --embedding_pkl_file="${data_dir}/metadata/VG/hanwang/class_embs.pkl" \
+#   --output_directory="${data_dir}/tfrecords/hanwang300-dedup"
+# 
+# # Prepare the tfrecord files for stanford300 setting.
+# 
+# python "tools/create_vspnet_vg_tf_record.py" \
+#   --split_pkl_file="${data_dir}/metadata/VG/stanford/split_stanford.pkl" \
+#   --proposal_coord_pkl_file="${data_dir}/data/VG/xfeat_proposals/iresnet_oi/coords.pkl" \
+#   --proposal_feature_lmdb_file="${data_dir}/data/VG/xfeat_proposals/iresnet_oi/xfeat_proposals_inresnet_float32_300x1536.lmdb" \
+#   --scene_graph_pkl_file="${data_dir}/metadata/VG/stanford/sg_stanford_with_duplicates.pkl" \
+#   --embedding_pkl_file="${data_dir}/metadata/VG/stanford/word_emb_stanford_2.pkl" \
+#   --output_directory="${data_dir}/tfrecords/stanford300-dedup"
+
+##########################################################
+# Using the ideal Graphs: 20 proposal setting.
+##########################################################
+
+# # Prepare the tfrecord files for hanwang setting.
+# 
+# python "tools/create_vspnet_vg_graph_tf_record.py" \
+#   --split_pkl_file="${data_dir}/metadata/VG/hanwang/split.pkl" \
+#   --proposal_coord_pkl_file="${data_dir}/data/VG/xfeat_proposals/iresnet_oi_lowprop/coords.pkl" \
+#   --proposal_feature_lmdb_file="${data_dir}/data/VG/xfeat_proposals/iresnet_oi_lowprop/feats_float32_20x1536.lmdb" \
+#   --scene_graph_pkl_file="${data_dir}/metadata/VG/hanwang/sg.pkl" \
+#   --embedding_pkl_file="${data_dir}/metadata/VG/hanwang/class_embs.pkl" \
+#   --output_directory="${data_dir}/tfrecords/graph-hanwang"
+
+##########################################################
+# Using the caption Graphs: 20 proposal setting.
+##########################################################
 
 # Prepare the tfrecord files for hanwang setting.
 
-python "tools/create_vspnet_vg_tf_record.py" \
+python "tools/create_vspnet_vg_caption_graph_tf_record.py" \
   --split_pkl_file="${data_dir}/metadata/VG/hanwang/split.pkl" \
   --proposal_coord_pkl_file="${data_dir}/data/VG/xfeat_proposals/iresnet_oi_lowprop/coords.pkl" \
   --proposal_feature_lmdb_file="${data_dir}/data/VG/xfeat_proposals/iresnet_oi_lowprop/feats_float32_20x1536.lmdb" \
   --scene_graph_pkl_file="${data_dir}/metadata/VG/hanwang/sg.pkl" \
+  --caption_graph_json_file="${data_dir}/text_graphs/text_graphs.jsonl" \
   --embedding_pkl_file="${data_dir}/metadata/VG/hanwang/class_embs.pkl" \
-  --output_directory="${data_dir}/tfrecords/hanwang"
+  --output_directory="${data_dir}/tfrecords/caption-graph-hanwang"
+
+
+
