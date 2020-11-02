@@ -271,12 +271,16 @@ def _evaluate(pipeline_proto, model_dir):
   run_config = tf.estimator.RunConfig(session_config=tf.ConfigProto(
       allow_soft_placement=True, gpu_options=tf.GPUOptions(allow_growth=True)))
 
+  checkpoint_path = tf.train.latest_checkpoint(model_dir)
+
   # Evaluate.
   model_fn = _create_model_fn(pipeline_proto, is_chief=run_config.is_chief)
   estimator = tf.estimator.Estimator(model_fn=model_fn,
-                                     model_dir=model_dir,
+                                     model_dir=None,
                                      config=run_config)
-  estimator.evaluate(eval_input_fn, steps=eval_config.steps)
+  estimator.evaluate(eval_input_fn,
+                     checkpoint_path=checkpoint_path,
+                     steps=eval_config.steps)
 
 
 def _test(pipeline_proto, model_dir):
