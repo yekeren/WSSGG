@@ -54,14 +54,16 @@ if [ ! -f "${raw_data}/annotations/scenegraphs_val2017.json" ] || [ ! -f "${raw_
     --output_directory="${raw_data}/annotations"
 fi
 
-if [ ! -d "${raw_data}/proposals/" ]; then
-  python "tools/create_coco_proposals.py" \
-    --logtostderr \
-    --train_image_file="${raw_data}/train2017.zip" \
-    --val_image_file="${raw_data}/val2017.zip" \
-    --test_image_file="${raw_data}/test2017.zip" \
-    --output_directory="${raw_data}/proposals"
-fi
+# if [ ! -d "${raw_data}/ss_proposals/" ]; then
+#   python "tools/create_coco_ss_proposals.py" \
+#     --logtostderr \
+#     --train_image_file="${raw_data}/train2017.zip" \
+#     --val_image_file="${raw_data}/val2017.zip" \
+#     --test_image_file="${raw_data}/test2017.zip" \
+#     --output_directory="${raw_data}/proposals"
+# fi
+
+exit 0
 
 python "tools/create_coco_tf_record.py" \
   --logtostderr \
