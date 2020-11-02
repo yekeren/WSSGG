@@ -61,31 +61,38 @@ from object_detection.core import standard_fields
 from model_utils.scene_graph_evaluation import SceneGraphEvaluator
 
 
-class WSSceneGraphGNet(model_base.ModelBase):
-  """WSSceneGraphGNet model to provide instance-level annotations. """
+class WSSceneGraphCaptionGNet(model_base.ModelBase):
+  """WSSceneGraphCaptionGNet model to provide instance-level annotations. """
 
   def __init__(self, options, is_training):
-    """Constructs the WSSceneGraphGNet instance. """
-    super(WSSceneGraphGNet, self).__init__(options, is_training)
+    """Constructs the WSSceneGraphCaptionGNet instance. """
+    super(WSSceneGraphCaptionGNet, self).__init__(options, is_training)
 
-    if not isinstance(options, model_pb2.WSSceneGraphGNet):
-      raise ValueError('Options has to be an WSSceneGraphGNet proto.')
+    if not isinstance(options, model_pb2.WSSceneGraphCaptionGNet):
+      raise ValueError('Options has to be an WSSceneGraphCaptionGNet proto.')
 
-    # Load token2id mapping, convert 1-based index to 0-based index.
+    # Load pre-trained GloVe word embeddings.
+    w2v_dict, self.words, self.wordvecs = utils.read_word_embeddings(
+        self.options.glove_vocab_file,
+        self.options.glove_embedding_file,
+        oov='OOV',
+        top_k=100000)
+    token2id = dict([(word, i) for i, word in enumerate(self.words)])
+    id2token = dict([(i, word) for i, word in enumerate(self.words)])
+    self.token2id = token_to_id.TokenToIdLayer(token2id, oov_id=0)
+    self.id2token = id_to_token.IdToTokenLayer(id2token, oov='OOV')
+
+    # Process token2id and id2token mapping, change to 0-based indexing.
     with tf.io.gfile.GFile(options.token_to_id_meta_file, 'r') as fid:
       meta = json.load(fid)
-      (entity2id, predicate2id) = (meta['label_to_idx'],
-                                   meta['predicate_to_idx'])
+      entity2id = meta['label_to_idx']
+      predicate2id = meta['predicate_to_idx']
 
-    categories = []
     id2entity = {}
     id2predicate = {}
     for key in entity2id.keys():
       entity2id[key] -= 1
       id2entity[entity2id[key]] = key
-      categories.append({'id': entity2id[key], 'name': key})
-    self.entity_categories = categories
-
     for key in predicate2id.keys():
       predicate2id[key] -= 1
       id2predicate[predicate2id[key]] = key
@@ -97,16 +104,18 @@ class WSSceneGraphGNet(model_base.ModelBase):
 
     self.n_entity = len(entity2id)
     self.n_predicate = len(predicate2id)
-
     logging.info('#Entity=%s, #Predicate=%s', self.n_entity, self.n_predicate)
 
-    # Load pre-trained GloVe word embeddings.
-    w2v_dict, _, _ = utils.read_word_embeddings(
-        self.options.glove_vocab_file, self.options.glove_embedding_file)
+    # Compute the entity and predicate embedding.
     self.entity_emb_weights = utils.lookup_word_embeddings(
         w2v_dict, id2entity, sorted(id2entity.keys()))
     self.predicate_emb_weights = utils.lookup_word_embeddings(
         w2v_dict, id2predicate, sorted(id2predicate.keys()))
+
+    # Create categories list required by object detection API.
+    self.entity_categories = []
+    for key in entity2id.keys():
+      self.entity_categories.append({'id': entity2id[key], 'name': key})
 
     # Initialize the arg_scope for FC layers.
     self.arg_scope_fn = hyperparams.build_hyperparams(options.fc_hyperparams,
@@ -355,8 +364,8 @@ class WSSceneGraphGNet(model_base.ModelBase):
       inputs.pop('scene_graph/object/box')
 
     # Extract proposal features.
-    # - proposal_masks = [batch, max_n_proposal].
     # - proposals = [batch, max_n_proposal, 4].
+    # - proposal_masks = [batch, max_n_proposal].
     n_proposal = inputs['image/n_proposal']
     proposals = inputs['image/proposal']
     proposal_features = inputs['image/proposal/feature']
@@ -378,9 +387,9 @@ class WSSceneGraphGNet(model_base.ModelBase):
           num_outputs=self.options.entity_hidden_units,
           activation_fn=tf.nn.leaky_relu,
           scope="shared_hidden")
-    shared_hiddens = slim.dropout(shared_hiddens,
-                                  self.options.dropout_keep_prob,
-                                  is_training=self.is_training)
+      shared_hiddens = slim.dropout(shared_hiddens,
+                                    self.options.dropout_keep_prob,
+                                    is_training=self.is_training)
     predictions.update({'features/shared_hidden': shared_hiddens})
 
     # Entity Score Refinement (ESR).
@@ -649,94 +658,75 @@ class WSSceneGraphGNet(model_base.ModelBase):
 
     return subject_index, object_index, predicate_index
 
-  def _get_triplets_from_pseudo_graph(self, n_node, n_edge, nodes, node_embs,
-                                      edges, senders, receivers, inputs):
-    """Get triplets from pseudo graph.
-    
-      A helper function to check the compatibility of the pseudo graph and the
-      triplets annotation. Note `n_edge == n_triple`.
+  def _extract_node_and_edge_labels(self, nodes, edges):
+    """Extract node and edge labels using GloVe Pseudo method.
+
+    GloVe Pseudo: check the inner-product of the word embeddings, assign the
+    labels with maximum inner-product.
 
     Args:
-      n_node: A [batch] int tensor.
-      n_edge: A [batch] int tensor.
-      nodes: A [batch, max_n_node] string tensor.
-      node_embs: A [batch, max_n_node, dims] float tensor.
-      edges: A [batch, max_n_edge] string tensor.
-      senders: A [batch, max_n_edge] int tensor.
-      receivers: A [batch, max_n_edge] int tensor.
-      inputs: The input dictionary used to check the compatibility.
+      nodes: A [batch, max_n_node] string tensor. E.g., 'football player'.
+      edges: A [batch, max_n_edge] string tensor. E.g., 'ride on'.
 
     Returns:
-      n_triple: A [batch] int tensor.
-      subject_ids: A [batch, max_n_triple] int tensor.
-      object_ids: A [batch, max_n_triple] int tensor.
-      predicate_ids: A [batch, max_n_triple] int tensor.
+      node_labels: A [batch, max_n_node] int tensor, values are ranged in [0, n_entity).
+      edge_labels: A [batch, max_n_edge] int tensor, values are ranged in [0, n_predicate).
     """
+    # Compute the initial node/edge embeddings.
+    # - node_embs = [batch, max_n_node, dims].
+    # - edge_embs = [batch, max_n_edge, dims].
+    open_vocab_embeddings = tf.constant(self.wordvecs)
+    node_embs = self._compute_initial_embeddings(nodes, open_vocab_embeddings)
+    edge_embs = self._compute_initial_embeddings(edges, open_vocab_embeddings)
 
-    def _get_gather_nd_indices(some_ids):
-      batch = some_ids.shape[0].value
-      max_n_edge = tf.shape(some_ids)[1]
-      batch_indices = tf.broadcast_to(tf.expand_dims(tf.range(batch), 1),
-                                      [batch, max_n_edge])
-      return tf.stack([batch_indices, some_ids], -1)
-
-    def _gather_and_pad(n_edge, nodes, node_ids):
-      max_n_edge = tf.shape(node_ids)[1]
-      edge_mask = tf.sequence_mask(n_edge, maxlen=max_n_edge)
-      name = tf.gather_nd(nodes, _get_gather_nd_indices(node_ids))
-      return tf.where(edge_mask, name, tf.zeros_like(name, dtype=tf.string))
-
-    subject_name = _gather_and_pad(n_edge, nodes, senders)
-    object_name = _gather_and_pad(n_edge, nodes, receivers)
-    assert_cond = tf.reduce_all([
-        tf.reduce_all(tf.equal(n_edge, inputs['scene_graph/n_triple'])),
-        tf.reduce_all(tf.equal(subject_name, inputs['scene_graph/subject'])),
-        tf.reduce_all(tf.equal(object_name, inputs['scene_graph/object'])),
-        tf.reduce_all(tf.equal(edges, inputs['scene_graph/predicate']))
-    ])
-    assert_op = tf.Assert(assert_cond,
-                          [subject_name, inputs['scene_graph/subject']])
-    with tf.control_dependencies([assert_op]):
-      subject_ids = self.entity2id(subject_name)
-      object_ids = self.entity2id(object_name)
-      predicate_ids = self.predicate2id(edges)
-
-    subject_embs = tf.gather_nd(node_embs, _get_gather_nd_indices(senders))
-    object_embs = tf.gather_nd(node_embs, _get_gather_nd_indices(receivers))
-
-    return n_edge, subject_ids, object_ids, predicate_ids, subject_embs, object_embs
+    # Match to the most probable label.
+    # - pseudo_node_labels = [batch, max_n_node], each entry is a entity id.
+    # - pseudo_edge_labels = [batch, max_n_edge], each entry is a predicate id.
+    pseudo_node_labels = tf.einsum('bnd,ed->bne', node_embs,
+                                   tf.constant(self.entity_emb_weights))
+    pseudo_edge_labels = tf.einsum('bnd,pd->bnp', edge_embs,
+                                   tf.constant(self.predicate_emb_weights))
+    pseudo_node_labels = tf.argmax(pseudo_node_labels, -1, output_type=tf.int32)
+    pseudo_edge_labels = tf.argmax(pseudo_edge_labels, -1, output_type=tf.int32)
+    return pseudo_node_labels, pseudo_edge_labels
 
   def _compute_initial_embeddings(self,
-                                  tokens,
-                                  initializer,
-                                  scope,
+                                  phrases,
+                                  open_vocab_embeddings,
                                   max_norm=None,
-                                  trainable=False):
+                                  oov='OOV'):
     """Computes the initial node embeddings.
 
     Args:
-      tokens: Token ids of the nodes/edges, a [batch, max_n_token] int tensor.
-      initializer: Initial value of the embedding weights.
-      scope: Variable scope for the token embedding weights.
+      phrases: String phrases of the nodes/edges, a [batch, max_n_phrases]
+        string tensor. E.g., 'pretty girl, ride on, etc.' may be multi-words.
+      open_vocab_embeddings: Word embedding matrix.
       max_norm: Maximum norm of the embedding weights.
-      trainable: If true, set the embedding weights trainable.
 
     Returns:
-      token_embeddings: A [batch, max_n_token, dims] float tensor.
+      phrase_embeds: A [batch, max_n_phrases, dims] float tensor.
     """
-    # regularizer = hyperparams._build_slim_regularizer(
-    #     self.options.fc_hyperparams.regularizer)
-    regularizer = None
+    # Split phrases by space ' '.
+    # - phrase_tokens = [batch, max_n_phrases, max_n_tokens].
+    batch = phrases.shape[0].value
+    phrase_tokens = tf.strings.split(phrases, sep=' ')
+    phrase_tokens = tf.sparse_tensor_to_dense(phrase_tokens, 'OOV')
+    phrase_tokens.set_shape([batch, None, None])
 
-    with tf.variable_scope(scope):
-      embedding_weights = tf.get_variable('embeddings',
-                                          initializer=initializer,
-                                          regularizer=None,
-                                          trainable=trainable)
-    embeddings = tf.nn.embedding_lookup(embedding_weights,
-                                        tokens,
-                                        max_norm=max_norm)
-    return embeddings
+    phrase_mask = tf.logical_not(tf.equal(phrase_tokens, 'OOV'))
+    phrase_mask = tf.cast(phrase_mask, tf.float32)
+
+    # Compute phrase embeddings, a.k.a., sum of phrase token embeddings.
+    # - phrase_token_embs = [batch, max_n_phrases, max_n_tokens, dims]
+    # - phrase_embs = [batch, max_n_phrases, dims]
+
+    phrase_token_ids = self.token2id(phrase_tokens)
+    phrase_token_embs = tf.nn.embedding_lookup(open_vocab_embeddings,
+                                               phrase_token_ids,
+                                               max_norm=max_norm)
+    phrase_embs = tf.div(tf.reduce_sum(phrase_token_embs, 2),
+                         1e-10 + tf.reduce_sum(phrase_mask, 2, keepdims=True))
+    return phrase_embs
 
   def build_losses(self, inputs, predictions, **kwargs):
     """Computes loss tensors.
@@ -754,39 +744,58 @@ class WSSceneGraphGNet(model_base.ModelBase):
     n_proposal = inputs['image/n_proposal']
     proposals = inputs['image/proposal']
 
+    # Parse pseudo graph annotations.
+    # Note: nodes and edges may involve multiple words.
+    n_node = inputs['scene_text_graph/n_node']
+    n_edge = inputs['scene_text_graph/n_edge']
+    nodes = inputs['scene_text_graph/nodes']
+    edges = inputs['scene_text_graph/edges']
+    senders = inputs['scene_text_graph/senders']
+    receivers = inputs['scene_text_graph/receivers']
+
     batch = n_proposal.shape[0]
     max_n_proposal = tf.shape(proposals)[1]
+    max_n_edge = tf.shape(edges)[1]
 
-    # Parse pseudo graph annotations.
-    n_node = inputs['scene_pseudo_graph/n_node']
-    n_edge = inputs['scene_pseudo_graph/n_edge']
-    nodes = inputs['scene_pseudo_graph/nodes']
-    edges = inputs['scene_pseudo_graph/edges']
-    senders = inputs['scene_pseudo_graph/senders']
-    receivers = inputs['scene_pseudo_graph/receivers']
+    # Get the pseudo text triplet.
+    # - n_triple = [batch], we use #relation but rule out #attributes.
+    # - subject_ids/object_ids/predicate_ids = [batch, max_n_edge]
+    n_triple = inputs['scene_text_graph/n_relation']
+    pseudo_node_labels, pseudo_edge_labels = self._extract_node_and_edge_labels(
+        nodes, edges)
 
-    # Using graph network to update node and edge embeddings.
+    batch_indices = tf.broadcast_to(tf.expand_dims(tf.range(batch), 1),
+                                    [batch, max_n_edge])
+    sender_indices = tf.stack([batch_indices, senders], -1)
+    receiver_indices = tf.stack([batch_indices, receivers], -1)
+
+    subject_ids = tf.gather_nd(pseudo_node_labels, sender_indices)
+    object_ids = tf.gather_nd(pseudo_node_labels, receiver_indices)
+    predicate_ids = pseudo_edge_labels
+
+    # Compute the initial node/edge embeddings.
+    # - node_embs = [batch, max_n_node, dims].
+    # - edge_embs = [batch, max_n_edge, dims].
     max_norm = None
     if self.options.HasField('graph_initial_embedding_max_norm'):
       max_norm = self.options.graph_initial_embedding_max_norm
 
-    node_embs = self._compute_initial_embeddings(
-        self.entity2id(nodes),
-        initializer=self.entity_emb_weights,
-        scope='tgnet/node/embeddings',
-        max_norm=max_norm,
+    open_vocab_embeddings = tf.get_variable(
+        'open_vocab_embeddings',
+        initializer=self.wordvecs,
         trainable=self.options.train_graph_initial_embedding)
-    edge_embs = self._compute_initial_embeddings(
-        self.predicate2id(edges),
-        initializer=self.predicate_emb_weights,
-        scope='tgnet/edge/embeddings',
-        max_norm=max_norm,
-        trainable=self.options.train_graph_initial_embedding)
+    node_embs = self._compute_initial_embeddings(nodes,
+                                                 open_vocab_embeddings,
+                                                 max_norm=max_norm)
+    edge_embs = self._compute_initial_embeddings(edges,
+                                                 open_vocab_embeddings,
+                                                 max_norm=max_norm)
 
-    tgnet = graph_networks.build_graph_network(self.options.text_graph_network,
-                                               is_training=self.is_training)
+    # Using graph network to update node and edge embeddings.
+    graph_network = graph_networks.build_graph_network(
+        self.options.text_graph_network, is_training=self.is_training)
     with slim.arg_scope(self.arg_scope_fn()):
-      updated_node_embs, updated_edge_embs = tgnet.compute_graph_embeddings(
+      updated_node_embs, updated_edge_embs = graph_network.compute_graph_embeddings(
           n_node,
           n_edge,
           node_embs,
@@ -796,12 +805,8 @@ class WSSceneGraphGNet(model_base.ModelBase):
           regularizer=hyperparams._build_slim_regularizer(
               self.options.fc_hyperparams.regularizer),
       )
-
-    # Parse triplets from pseudo graph.
-    (n_triple, subject_ids, object_ids, predicate_ids, subject_text_embs,
-     object_text_embs) = self._get_triplets_from_pseudo_graph(
-         n_node, n_edge, nodes, updated_node_embs, edges, senders, receivers,
-         inputs)
+    subject_text_embs = tf.gather_nd(updated_node_embs, sender_indices)
+    object_text_embs = tf.gather_nd(updated_node_embs, receiver_indices)
 
     # Multiple Entity Detection (MED).
     # - `initial_detection_scores`=[batch, max_n_proposal, n_entity].
@@ -943,18 +948,18 @@ class WSSceneGraphGNet(model_base.ModelBase):
     gt_subject_box = inputs['scene_graph/subject/box']
     gt_object_box = inputs['scene_graph/object/box']
 
-    # Compute the entity classification accuracy.
-    subject_logits = predictions['pseudo/logits_entity_given_subject']
-    object_logits = predictions['pseudo/logits_entity_given_object']
+    # # Compute the entity classification accuracy.
+    # subject_logits = predictions['pseudo/logits_entity_given_subject']
+    # object_logits = predictions['pseudo/logits_entity_given_object']
 
-    for name, labels, logits in [
-        ('metrics/predict_subject', subject_ids, subject_logits),
-        ('metrics/predict_object', object_ids, object_logits),
-    ]:
-      bingo = tf.equal(tf.cast(tf.argmax(logits, -1), tf.int32), labels)
-      accuracy_metric = tf.keras.metrics.Mean()
-      accuracy_metric.update_state(bingo)
-      metric_dict[name] = accuracy_metric
+    # for name, labels, logits in [
+    #     ('metrics/predict_subject', subject_ids, subject_logits),
+    #     ('metrics/predict_object', object_ids, object_logits),
+    # ]:
+    #   bingo = tf.equal(tf.cast(tf.argmax(logits, -1), tf.int32), labels)
+    #   accuracy_metric = tf.keras.metrics.Mean()
+    #   accuracy_metric.update_state(bingo)
+    #   metric_dict[name] = accuracy_metric
 
     # Compute the object detection metrics.
     eval_dict = {

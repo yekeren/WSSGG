@@ -28,6 +28,31 @@ from modeling.utils import masked_ops
 from object_detection.core.post_processing import batch_multiclass_non_max_suppression
 
 
+def read_word_embeddings(vocab_file, embedding_file, oov='OOV', top_k=None):
+  with tf.gfile.GFile(vocab_file, 'r') as fid:
+    words = [oov] + [x.strip('\n') for x in fid]
+  wordvecs = np.load(embedding_file)
+  wordvecs = np.concatenate([np.zeros((1, wordvecs.shape[-1])), wordvecs], 0)
+
+  if top_k:
+    words = words[:top_k]
+    wordvecs = wordvecs[:top_k]
+
+  w2v_dict = {}
+  for word, vec in zip(words, wordvecs):
+    w2v_dict[word] = vec
+  return w2v_dict, words, wordvecs.astype(np.float32)
+
+
+def lookup_word_embeddings(w2v_dict, id2w, ids):
+  wordvecs = []
+  for id_ in ids:
+    words = id2w[id_].lower().split(' ')
+    vecs = np.stack([w2v_dict[w] for w in words], 0)
+    wordvecs.append(vecs.mean(0))
+  return np.stack(wordvecs, 0).astype(np.float32)
+
+
 def gather_overlapped_box_indicator_by_iou(n_proposal,
                                            proposals,
                                            n_reference,

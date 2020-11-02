@@ -48,6 +48,7 @@ from model_utils.scene_graph_evaluation import SceneGraphEvaluator
 from models import utils
 from models import model_base
 from models import ws_scene_graph_gnet
+from models import ws_scene_graph_caption_gnet
 
 from object_detection.metrics import coco_evaluation
 from object_detection.core import standard_fields
@@ -64,8 +65,13 @@ class WSSceneGraphRnnRefine(model_base.ModelBase):
     """Constructs the WSSceneGraphGNet instance. """
     super(WSSceneGraphRnnRefine, self).__init__(options, is_training)
 
-    self._proposal_network = ws_scene_graph_gnet.WSSceneGraphGNet(
-        options.proposal_network, is_training)
+    proposal_network_oneof = options.WhichOneof('proposasl_network_oneof')
+    if proposal_network_oneof == 'ws_scene_graph_gnet':
+      self._proposal_network = ws_scene_graph_gnet.WSSceneGraphGNet(
+          options.ws_scene_graph_gnet, is_training)
+    elif proposal_network_oneof == 'ws_scene_graph_caption_gnet':
+      self._proposal_network = ws_scene_graph_caption_gnet.WSSceneGraphCaptionGNet(
+          options.ws_scene_graph_caption_gnet, is_training)
 
     self.arg_scope_fn = self._proposal_network.arg_scope_fn
 
@@ -419,7 +425,7 @@ class WSSceneGraphRnnRefine(model_base.ModelBase):
     if not self.is_training:
       graph_proposal_scores = predictions[
           'refinement/iter_%i/proposal_probas' %
-          self.options.proposal_network.n_refine_iteration]
+          self._proposal_network.options.n_refine_iteration]
       graph_relation_scores = predictions['refinement/relation_probas']
       graph_proposal_scores = graph_proposal_scores[:, :, 1:]
       graph_relation_scores = graph_relation_scores[:, :, 1:]
@@ -632,10 +638,10 @@ class WSSceneGraphRnnRefine(model_base.ModelBase):
 
     proposal_scores_0 = predictions[
         'refinement/iter_%i/proposal_probas' %
-        self.options.proposal_network.n_refine_iteration][:, :, 1:]
+        self._proposal_network.options.n_refine_iteration][:, :, 1:]
     relation_scores_0 = predictions['refinement/relation_probas'][:, :, 1:]
 
-    proposal_to_proposal_weight = self.options.proposal_network.joint_inferring_relation_weight
+    proposal_to_proposal_weight = self._proposal_network.options.joint_inferring_relation_weight
 
     mps = GraphMPS(n_triple=n_triple,
                    n_proposal=n_proposal,
@@ -650,7 +656,7 @@ class WSSceneGraphRnnRefine(model_base.ModelBase):
                        tf.transpose(proposal_scores_0, [0, 2, 1]),
                        object_index),
                    proposal_to_proposal_weight=proposal_to_proposal_weight,
-                   use_log_prob=self.options.proposal_network.use_log_prob)
+                   use_log_prob=self._proposal_network.options.use_log_prob)
 
     loss_dict.update(
         self._compute_triple_refine_losses(
