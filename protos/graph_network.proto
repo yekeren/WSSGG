@@ -1,0 +1,54 @@
+syntax = "proto2";
+
+message GraphNetwork {
+  oneof graph_network_oneof {
+    NoGraph no_graph = 1;
+    SelfAttention self_attention = 2;
+    MessagePassing message_passing = 4;
+  }
+}
+
+// A graph that directly returns the node/edge embeddings.
+message NoGraph {
+}
+
+// A graph using self attention to update node embeddings.
+message SelfAttention{
+  // Number of stacked layers.
+  optional uint32 n_layer = 1 [default = 1];
+  
+  // Number of attention heads.
+  optional uint32 n_head = 2 [default = 1];
+
+  // Dimensions of the queries and keys.
+  optional uint32 key_dims = 3 [default = 100];
+
+  // If true, add bi-directional edges object-predicate-subject.
+  optional bool add_bi_directional_edges = 6 [default = true];
+
+  // If true, add self-loop.
+  optional bool add_self_loop_edges = 7 [default = false];
+}
+
+message MessagePassing {
+  // Number of stacked layers.
+  optional uint32 n_layer = 1 [default = 1];
+  
+  // Number of attention heads.
+  optional uint32 n_head = 2 [default = 1];
+
+  // Dimensions of the queries and keys.
+  optional uint32 key_dims = 3 [default = 100];
+
+  // If true, add bi-directional edges object-predicate-subject.
+  optional bool add_bi_directional_edges = 6 [default = true];
+
+  // If true, add self-loop.
+  optional bool add_self_loop_edges = 7 [default = false];
+
+  optional bool use_reverse_edges = 10 [default = false];
+
+  optional uint32 hidden_size = 8 [default = 50];
+
+  optional float attn_scale = 9 [default = 1.0];
+}

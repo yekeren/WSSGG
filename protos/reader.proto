@@ -4,6 +4,8 @@ message Reader {
   oneof reader_oneof {
     COCOReader coco_reader = 1;
     SceneGraphReader scene_graph_reader = 2;
+    SceneGraphPseudoGraphReader scene_graph_pseudo_graph_reader = 3;
+    SceneGraphTextGraphReader scene_graph_text_graph_reader = 4;
   }
 }
 
@@ -27,6 +29,58 @@ message COCOReader {
 }
 
 message SceneGraphReader {
+  // Pattern of the input files.
+  repeated string input_pattern = 1;
+
+  // Shuffle buffer size.
+  optional int32 shuffle_buffer_size = 2 [default = 1000];
+
+  // Interleave cycle length.
+  optional int32 interleave_cycle_length = 3 [default = 2];
+
+  // Number of parallel calls.
+  optional int32 num_parallel_calls = 5 [default = 5];
+
+  // Batch size.
+  optional int32 batch_size = 6 [default = 16];
+
+  // Prefetch buffer size.
+  optional int32 prefetch_buffer_size = 7 [default = 200];
+
+  // Dimensions of the pre-extracted FRCNN features.
+  optional int32 feature_dimensions = 8 [default = 1536];
+
+  // Maximum number of proposals.
+  optional int32 max_n_proposal = 9 [default = 300];
+}
+
+message SceneGraphPseudoGraphReader {
+  // Pattern of the input files.
+  repeated string input_pattern = 1;
+
+  // Shuffle buffer size.
+  optional int32 shuffle_buffer_size = 2 [default = 1000];
+
+  // Interleave cycle length.
+  optional int32 interleave_cycle_length = 3 [default = 2];
+
+  // Number of parallel calls.
+  optional int32 num_parallel_calls = 5 [default = 5];
+
+  // Batch size.
+  optional int32 batch_size = 6 [default = 16];
+
+  // Prefetch buffer size.
+  optional int32 prefetch_buffer_size = 7 [default = 200];
+
+  // Dimensions of the pre-extracted FRCNN features.
+  optional int32 feature_dimensions = 8 [default = 1536];
+
+  // Maximum number of proposals.
+  optional int32 max_n_proposal = 9 [default = 300];
+}
+
+message SceneGraphTextGraphReader {
   // Pattern of the input files.
   repeated string input_pattern = 1;
 
