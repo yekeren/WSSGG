@@ -72,6 +72,7 @@ def _parse_single_example(example, options):
       # Scene graph text graph.
       'scene_text_graph/caption': tf.io.VarLenFeature(tf.string),
       'scene_text_graph/n_entity': tf.io.VarLenFeature(tf.int64),
+      'scene_text_graph/n_relation': tf.io.VarLenFeature(tf.int64),
       'scene_text_graph/n_node': tf.io.VarLenFeature(tf.int64),
       'scene_text_graph/n_edge': tf.io.VarLenFeature(tf.int64),
       'scene_text_graph/nodes': tf.io.VarLenFeature(tf.string),
@@ -105,6 +106,8 @@ def _parse_single_example(example, options):
   text_graph = utils_tf.get_graph(graphs, index)
   text_graph_n_entity = tf.sparse_tensor_to_dense(
       parsed['scene_text_graph/n_entity'])[index]
+  text_graph_n_relation = tf.sparse_tensor_to_dense(
+      parsed['scene_text_graph/n_relation'])[index]
   text_graph_caption = tf.sparse_tensor_to_dense(
       parsed['scene_text_graph/caption'])[index]
 
@@ -154,6 +157,8 @@ def _parse_single_example(example, options):
           text_graph_caption,
       'scene_text_graph/n_entity':
           text_graph_n_entity,
+      'scene_text_graph/n_relation':
+          text_graph_n_relation,
       'scene_text_graph/n_node':
           text_graph.n_node[0],
       'scene_text_graph/n_edge':
@@ -222,6 +227,7 @@ def _create_dataset(options, is_training, input_pipeline_context=None):
       'scene_pseudo_graph/receivers': [None],
       'scene_text_graph/caption': [],
       'scene_text_graph/n_entity': [],
+      'scene_text_graph/n_relation': [],
       'scene_text_graph/n_node': [],
       'scene_text_graph/n_edge': [],
       'scene_text_graph/nodes': [None],

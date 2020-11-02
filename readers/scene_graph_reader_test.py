@@ -38,7 +38,7 @@ class SceneGraphReaderTest(tf.test.TestCase):
         shuffle_buffer_size: 500
         prefetch_buffer_size: 500
         feature_dimensions: 1536
-        max_n_proposals: 29
+        max_n_proposal: 29
       }
     """ % (batch_size)
     options = text_format.Merge(options_str, reader_pb2.Reader())
