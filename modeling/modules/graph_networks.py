@@ -48,6 +48,7 @@ class GraphNet(abc.ABC):
     self.is_training = is_training
     self.add_bi_directional_edges = None
     self.add_self_loop_edges = None
+    self.use_reverse_edges = None
 
   @staticmethod
   def _pack_graphs_tuple(batch_n_node,
@@ -56,6 +57,7 @@ class GraphNet(abc.ABC):
                          batch_edges,
                          batch_senders,
                          batch_receivers,
+                         use_reverse_edges=False,
                          add_bi_directional_edges=False,
                          add_self_loop_edges=False):
     """Packs data into a GraphTuple instance.
@@ -85,6 +87,10 @@ class GraphNet(abc.ABC):
       edges = edges[:n_edge]
       senders = senders[:n_edge]
       receivers = receivers[:n_edge]
+
+      if use_reverse_edges:  # TODO: test
+        senders, receivers = receivers, senders
+        assert not add_bi_directional_edges
 
       if add_bi_directional_edges:
         (senders, receivers) = (tf.concat([senders, receivers], axis=0),
@@ -148,8 +154,14 @@ class GraphNet(abc.ABC):
 
     return batch_nodes, batch_edges
 
-  def compute_graph_embeddings(self, batch_n_node, batch_n_edge, batch_nodes,
-                               batch_edges, batch_senders, batch_receivers):
+  def compute_graph_embeddings(self,
+                               batch_n_node,
+                               batch_n_edge,
+                               batch_nodes,
+                               batch_edges,
+                               batch_senders,
+                               batch_receivers,
+                               regularizer=None):
     """Computes graph embeddings for the graph nodes and edges.
 
     Args:
@@ -159,6 +171,7 @@ class GraphNet(abc.ABC):
       batch_edges: A [batch, max_n_edge, dims] float tensor.
       batch_senders: A [batch, max_n_edge] int tensor.
       batch_receivers: A [batch, max_n_edge] int tensor.
+      regularizer: Regularizer to be used in linear layers.
       
     Returns:
       updated_node_embs: A [batch, max_n_node, dims] float tensor.
@@ -174,21 +187,23 @@ class GraphNet(abc.ABC):
         batch_edges,
         batch_senders,
         batch_receivers,
+        use_reverse_edges=self.use_reverse_edges,
         add_bi_directional_edges=self.add_bi_directional_edges,
         add_self_loop_edges=self.add_self_loop_edges)
 
-    output_graphs_tuple = self._build_graph(graphs_tuple)
+    output_graphs_tuple = self._build_graph(graphs_tuple, regularizer)
 
     updated_node_embs, updated_edge_embs = self._unpack_graphs_tuple(
         output_graphs_tuple, max_n_node, max_n_edge)
     return updated_node_embs, updated_edge_embs
 
   @abc.abstractmethod
-  def _build_graph(self, graphs_tuple):
+  def _build_graph(self, graphs_tuple, regularizer):
     """Builds graph network.
 
     Args:
       graphs_tuple: A GraphTuple instance.
+      regularizer: Regularizer to be used in linear layers.
 
     Returns:
       output_graphs_tuple: A updated GraphTuple instance.
@@ -214,11 +229,12 @@ class NoGraph(GraphNet):
     self.add_bi_directional_edges = False
     self.add_self_loop_edges = False
 
-  def _build_graph(self, graphs_tuple):
+  def _build_graph(self, graphs_tuple, regularizer):
     """Builds graph network.
 
     Args:
       graphs_tuple: A GraphTuple instance.
+      regularizer: Regularizer to be used in linear layers.
 
     Returns:
       output_graphs_tuple: A updated GraphTuple instance.
@@ -244,11 +260,12 @@ class SelfAttention(GraphNet):
     self.add_bi_directional_edges = options.add_bi_directional_edges
     self.add_self_loop_edges = options.add_self_loop_edges
 
-  def _build_graph(self, graphs_tuple):
+  def _build_graph(self, graphs_tuple, regularizer):
     """Builds graph network.
 
     Args:
       graphs_tuple: A GraphTuple instance.
+      regularizer: Regularizer to be used in linear layers.
 
     Returns:
       output_graphs_tuple: A updated GraphTuple instance.
@@ -324,6 +341,7 @@ class GNetMPNN(_base.AbstractModule):
              hidden_size=50,
              dropout_rate=0.5,
              attn_scale=1.0,
+             regularizer=None,
              is_training=False):
 
     node_values = input_graph.nodes
@@ -334,24 +352,20 @@ class GNetMPNN(_base.AbstractModule):
 
     # Compute edge values, sender feature + edge feature.
     # - edge_values = [total_num_edges, value_dims]
-    edge_value_block = blocks.EdgeBlock(
-        edge_model_fn=lambda: snt.Linear(output_size=value_dims),
-        use_edges=True,
-        use_receiver_nodes=True,
-        use_sender_nodes=True,
-        use_globals=False,
-        name='update_edge_values')
+    edge_value_block = blocks.EdgeBlock(edge_model_fn=lambda: snt.Linear(
+        output_size=value_dims, regularizers={'w': regularizer}),
+                                        use_edges=True,
+                                        use_receiver_nodes=True,
+                                        use_sender_nodes=True,
+                                        use_globals=False,
+                                        name='update_edge_values')
     edge_values = edge_value_block(input_graph).edges
     tf.summary.histogram('mpnn/edge_values', edge_values)
 
-    # Attention weight for each edge, logit = f(sender_feature, receiver_feature, edge_feature).
-    # - attention_weights_logits = [total_num_edges, 1]
-    def _edge_mlp():
-      return snt.nets.MLP(output_sizes=[hidden_size, 1], activation=tf.nn.tanh)
-
     logits_block = blocks.EdgeBlock(
-        #edge_model_fn=lambda: snt.Linear(output_size=1),
-        edge_model_fn=_edge_mlp,
+        edge_model_fn=lambda: snt.nets.MLP(output_sizes=[hidden_size, 1],
+                                           activation=tf.nn.tanh,
+                                           regularizers={'w': regularizer}),
         use_edges=True,
         use_receiver_nodes=True,
         use_sender_nodes=True,
@@ -394,14 +408,16 @@ class MessagePassing(GraphNet):
     if not isinstance(options, graph_network_pb2.MessagePassing):
       raise ValueError('Options has to be an MessagePassing proto.')
 
+    self.use_reverse_edges = options.use_reverse_edges
     self.add_bi_directional_edges = options.add_bi_directional_edges
     self.add_self_loop_edges = False
 
-  def _build_graph(self, graphs_tuple):
+  def _build_graph(self, graphs_tuple, regularizer):
     """Builds graph network.
 
     Args:
       graphs_tuple: A GraphTuple instance.
+      regularizer: Regularizer to be used in linear layers.
 
     Returns:
       output_graphs_tuple: A updated GraphTuple instance.
@@ -416,15 +432,34 @@ class MessagePassing(GraphNet):
     edge_states = rnn_edges.initial_state(
         batch_size=tf.shape(graphs_tuple.edges)[0])
 
+    _, node_states = rnn_nodes(graphs_tuple.nodes, node_states)
+    _, edge_states = rnn_edges(graphs_tuple.edges, edge_states)
+    graphs_tuple = graphs_tuple.replace(nodes=node_states, edges=edge_states)
+
     # Stack layers.
     network = GNetMPNN()
     for _ in range(self.options.n_layer):
+      graphs_tuple = network(graphs_tuple,
+                             hidden_size=self.options.hidden_size,
+                             regularizer=regularizer,
+                             attn_scale=self.options.attn_scale,
+                             is_training=self.is_training)
       _, node_states = rnn_nodes(graphs_tuple.nodes, node_states)
       _, edge_states = rnn_edges(graphs_tuple.edges, edge_states)
       graphs_tuple = graphs_tuple.replace(nodes=node_states, edges=edge_states)
-      graphs_tuple = network(graphs_tuple,
-                             hidden_size=self.options.hidden_size,
-                             is_training=self.is_training)
+
+    # Projectthe RNN states.
+    node_states = slim.fully_connected(
+        graphs_tuple.nodes,
+        num_outputs=graphs_tuple.nodes.shape[-1].value,
+        activation_fn=None,
+        scope='fc_nodes')
+    edge_states = slim.fully_connected(
+        graphs_tuple.edges,
+        num_outputs=graphs_tuple.edges.shape[-1].value,
+        activation_fn=None,
+        scope='fc_edges')
+    graphs_tuple = graphs_tuple.replace(nodes=node_states, edges=edge_states)
     return graphs_tuple
 
 
