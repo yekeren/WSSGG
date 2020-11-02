@@ -4,6 +4,7 @@
 * [Preparing datasets](#preparing-datasets)
     - [Setup the text parser from Stanford Scene Graph Parser](#setup-the-text-parser-from-stanford-scene-graph-parser)
     - [Extract text graphs from the VG captions](#extract-text-graphs-from-the-vg-captions)
+    - [Set up experimental data following VSPNet](#set-up-experimental-data-following-vspnet)
 * [Training](#training)
 * [Evaluation](#evaluation)
 
@@ -52,20 +53,13 @@ We use the following command to extract text graphs from the VG region descripti
 sh tools/download_and_preprocess_vg_captions.sh data-vspnet/text_graphs
 ```
 
+###  Set up experimental data following [VSPNet](https://github.com/alirezazareian/vspnet)
 We provide scripts and tools to set up experiments identical to the Zareian et al., CVPR2020. We download proposal boxes, box features, and preprocessed data annotation splits from their git repository. For more information, please refer to [their repository](https://github.com/alirezazareian/vspnet).
 
 The following scripts shall download the data needed and generate .tfrecord files under the "./data-vspnet/tfrecords" directory.
 
 ```
 sh download_and_prepare_vspnet_experiments.sh "data-vspnet"
-```
-
-To check the validity of the generated .tfrecord files, run 
-
-```
-python "readers/scene_graph_reader_demo.py" \
-  --image_directory "data-vspnet/images" \
-  --tf_record_file PATH_TO_THE_FILE
 ```
 
 ## Training
