@@ -29,31 +29,28 @@ import numpy as np
 import tensorflow as tf
 from graph_nets import utils_np
 
-flags.DEFINE_string('train_image_file', '', 'Training image zip file.')
-flags.DEFINE_string('val_image_file', '', 'Validation image zip file.')
 flags.DEFINE_string('train_scenegraph_annotations_file', '',
                     'Scene graph annotations JSON file.')
 flags.DEFINE_string('val_scenegraph_annotations_file', '',
                     'Scene graph annotations JSON file.')
-flags.DEFINE_string('proposal_nparray_directory', '',
+flags.DEFINE_string('proposal_npz_directory', '',
                     'Path to the directory saving proposal data.')
 flags.DEFINE_string('output_directory', '',
                     'Path to store the output annotation file.')
-flags.DEFINE_integer('max_proposals', 2000,
-                     'Maximum number of proposals to be used.')
 
 FLAGS = flags.FLAGS
 
 _NUM_PROPOSAL_SUBDIRS = 10
 
 
-def _create_tf_example(annot, encoded_jpg, proposals):
+def _create_tf_example(annot, num_proposals, proposals, proposal_features):
   """Creates tf example proto.
 
   Args:
     annot: JSON object containing scene graph annotations.
-    encoded_jpg: A string represent the encoded jpg data.
+    num_proposals: An integer denoting the number of proposals.
     proposals: A [num_proposals, 4] np array.
+    proposal_features: A [num_proposals, dims] np array.
 
   Returns:
     tf_example: A tf.train.Example proto.
@@ -92,24 +89,36 @@ def _create_tf_example(annot, encoded_jpg, proposals):
 
   # Set the image and proposals.
   feature_dict.update({
-      'image/encoded': _bytes_feature(encoded_jpg),
-      'image/format': _string_feature('jpeg'),
-      'image/proposal/bbox/ymin': _float_feature_list(proposals[:, 0].tolist()),
-      'image/proposal/bbox/xmin': _float_feature_list(proposals[:, 1].tolist()),
-      'image/proposal/bbox/ymax': _float_feature_list(proposals[:, 2].tolist()),
-      'image/proposal/bbox/xmax': _float_feature_list(proposals[:, 3].tolist())
+      'image/n_proposal':
+          _int64_feature(len(proposals)),
+      'image/proposal/bbox/ymin':
+          _float_feature_list(proposals[:, 0].tolist()),
+      'image/proposal/bbox/xmin':
+          _float_feature_list(proposals[:, 1].tolist()),
+      'image/proposal/bbox/ymax':
+          _float_feature_list(proposals[:, 2].tolist()),
+      'image/proposal/bbox/xmax':
+          _float_feature_list(proposals[:, 3].tolist()),
+      'image/proposal/feature':
+          _float_feature_list(proposal_features.flatten().tolist()),
   })
 
   # Set the scene graph info.
   data_dict_list = []
+  n_entity = []
+  n_relation = []
+  captions = []
   for sg in annot['scene_graphs']:
-
     assert all((len(x['names']) == 1 for x in sg['objects']))
 
     # Nodes (objects + attributes).
     objects = [x['names'][0] for x in sg['objects']]
     attributes = [x['attribute'] for x in sg['attributes']]
     nodes = objects + attributes
+    captions.append(sg['phrase'])
+
+    n_entity.append(len(objects))
+    n_relation.append(len(sg['relationships']))
 
     # Edges (relationships + attributes), bi-directional.
     senders, receivers, edges = [], [], []
@@ -130,12 +139,15 @@ def _create_tf_example(annot, encoded_jpg, proposals):
 
   graphs_tuple = utils_np.data_dicts_to_graphs_tuple(data_dict_list)
   feature_dict.update({
-      'graphs/n_node': _int64_feature_list(graphs_tuple.n_node),
-      'graphs/n_edge': _int64_feature_list(graphs_tuple.n_edge),
-      'graphs/nodes': _string_feature_list(graphs_tuple.nodes),
-      'graphs/edges': _string_feature_list(graphs_tuple.edges),
-      'graphs/senders': _int64_feature_list(graphs_tuple.senders),
-      'graphs/receivers': _int64_feature_list(graphs_tuple.receivers)
+      'scene_text_graph/caption': _string_feature_list(captions),
+      'scene_text_graph/n_entity': _int64_feature_list(n_entity),
+      'scene_text_graph/n_relation': _int64_feature_list(n_relation),
+      'scene_text_graph/n_node': _int64_feature_list(graphs_tuple.n_node),
+      'scene_text_graph/n_edge': _int64_feature_list(graphs_tuple.n_edge),
+      'scene_text_graph/nodes': _string_feature_list(graphs_tuple.nodes),
+      'scene_text_graph/edges': _string_feature_list(graphs_tuple.edges),
+      'scene_text_graph/senders': _int64_feature_list(graphs_tuple.senders),
+      'scene_text_graph/receivers': _int64_feature_list(graphs_tuple.receivers)
   })
 
   tf_example = tf.train.Example(features=tf.train.Features(
@@ -143,46 +155,45 @@ def _create_tf_example(annot, encoded_jpg, proposals):
   return tf_example
 
 
-def _create_tf_record_from_annotations(image_zip_file,
-                                       scenegraph_annotations_file,
-                                       tf_record_file, num_output_parts):
+def _create_tf_record_from_annotations(scenegraph_annotations_file,
+                                       proposal_npz_directory, tf_record_file,
+                                       num_output_parts):
   """Creates tf record files from scenegraphs annotations.
 
   Args:
-    image_zip_file: Path to the .zip images.
-    scenegraph_annotations_file: JSON file containing caption annotations.
+    scenegraph_annotations_file: JSON file containing scene graph annotations.
+    proposal_npz_directory: Path to the directory saving proposal data.
     tf_record_file: Tf record file containing tf.example protos.
     num_output_parts: Number of output partitions.
   """
   with tf.io.gfile.GFile(scenegraph_annotations_file, 'r') as fid:
     annots = json.load(fid)
 
-  image_dir = os.path.split(image_zip_file)[1].split('.')[0]
-
   writers = []
   for i in range(num_output_parts):
     filename = tf_record_file + '-%05d-of-%05d' % (i, num_output_parts)
     writers.append(tf.io.TFRecordWriter(filename))
 
-  with zipfile.ZipFile(image_zip_file) as zf:
-    for i, annot in enumerate(annots):
-      # Read image and proposals.
-      with zf.open(os.path.join(image_dir, annot['file_name'])) as fid:
-        encoded_jpg = fid.read()
+  for i, annot in enumerate(annots):
+    # Read proposals.
+    npz_path = os.path.join(proposal_npz_directory,
+                            str(annot['id'] % _NUM_PROPOSAL_SUBDIRS),
+                            '%012d.npz' % (annot['id']))
 
-      nparray_path = os.path.join(FLAGS.proposal_nparray_directory,
-                                  str(annot['id'] % _NUM_PROPOSAL_SUBDIRS),
-                                  '%012d.npy' % (annot['id']))
+    with tf.io.gfile.GFile(npz_path, 'rb') as fid:
+      data = np.load(fid)
+      num_proposals = data['num_proposals']
+      proposals = data['proposals']
+      proposal_features = data['proposal_features']
 
-      with tf.io.gfile.GFile(nparray_path, 'rb') as fid:
-        proposals = np.load(fid)
-        proposals = proposals[:FLAGS.max_proposals, :]
+      assert num_proposals == 20
 
-      # Encode tf example.
-      tf_example = _create_tf_example(annot, encoded_jpg, proposals)
-      writers[i % num_output_parts].write(tf_example.SerializeToString())
-      if (i + 1) % 500 == 0:
-        logging.info('On example %i/%i', i + 1, len(annots))
+    # Encode tf example.
+    tf_example = _create_tf_example(annot, num_proposals, proposals,
+                                    proposal_features)
+    writers[i % num_output_parts].write(tf_example.SerializeToString())
+    if (i + 1) % 500 == 0:
+      logging.info('On example %i/%i', i + 1, len(annots))
 
   for writer in writers:
     writer.close()
@@ -190,28 +201,25 @@ def _create_tf_record_from_annotations(image_zip_file,
 
 
 def main(_):
-  assert FLAGS.train_image_file, '`train_image_file` missing.'
-  assert FLAGS.val_image_file, '`val_image_file` missing.'
-  assert FLAGS.val_scenegraph_annotations_file, '`val_scenegraph_annotations_file` missing.'
   assert FLAGS.train_scenegraph_annotations_file, '`train_scenegraph_annotations_file` missing.'
-  assert FLAGS.proposal_nparray_directory, '`proposal_nparray_directory` missing.'
+  assert FLAGS.val_scenegraph_annotations_file, '`val_scenegraph_annotations_file` missing.'
+  assert FLAGS.proposal_npz_directory, '`proposal_npz_directory` missing.'
   assert FLAGS.output_directory, '`output_directory` missing.'
 
   logging.set_verbosity(logging.INFO)
 
   tf.gfile.MakeDirs(FLAGS.output_directory)
 
-  output_val_file = os.path.join(FLAGS.output_directory,
-                                 'scenegraphs_val2017.tfrecord')
   output_train_file = os.path.join(FLAGS.output_directory,
                                    'scenegraphs_train2017.tfreocrd')
+  # output_val_file = os.path.join(FLAGS.output_directory,
+  #                                'scenegraphs_val2017.tfrecord')
 
-  _create_tf_record_from_annotations(FLAGS.val_image_file,
-                                     FLAGS.val_scenegraph_annotations_file,
-                                     output_val_file, 5)
-  _create_tf_record_from_annotations(FLAGS.train_image_file,
-                                     FLAGS.train_scenegraph_annotations_file,
+  _create_tf_record_from_annotations(FLAGS.train_scenegraph_annotations_file,
+                                     FLAGS.proposal_npz_directory,
                                      output_train_file, 20)
+  # _create_tf_record_from_annotations(FLAGS.val_scenegraph_annotations_file,
+  #                                    output_val_file, 5)
 
   logging.info('Done')
 

@@ -54,24 +54,38 @@ if [ ! -f "${raw_data}/annotations/scenegraphs_val2017.json" ] || [ ! -f "${raw_
     --output_directory="${raw_data}/annotations"
 fi
 
+# Now, DONT use the Selective Search proposals.
 # if [ ! -d "${raw_data}/ss_proposals/" ]; then
 #   python "tools/create_coco_ss_proposals.py" \
 #     --logtostderr \
 #     --train_image_file="${raw_data}/train2017.zip" \
 #     --val_image_file="${raw_data}/val2017.zip" \
 #     --test_image_file="${raw_data}/test2017.zip" \
-#     --output_directory="${raw_data}/proposals"
+#     --output_directory="${raw_data}/ss_proposals"
 # fi
 
-exit 0
+export PYTHONPATH="`pwd`/tensorflow_models/research:$PYTHONPATH"
+export PYTHONPATH="`pwd`/tensorflow_models/research/slim:$PYTHONPATH"
+export CUDA_VISIBLE_DEVICES=7
+
+
+# Extract FRCNN proposals.
+if [ ! -d "${raw_data}/frcnn_proposals/" ]; then
+  python "tools/create_coco_frcnn_proposals.py" \
+    --logtostderr \
+    --train_image_file="${raw_data}/train2017.zip" \
+    --val_image_file="${raw_data}/val2017.zip" \
+    --test_image_file="${raw_data}/test2017.zip" \
+    --output_directory="${raw_data}/frcnn_proposals" \
+    --detection_pipeline_proto="zoo/faster_rcnn_inception_resnet_v2_atrous_lowproposals_oid_2018_01_28/pipeline.config" \
+    --detection_checkpoint_file="zoo/faster_rcnn_inception_resnet_v2_atrous_lowproposals_oid_2018_01_28/model.ckpt"
+fi
 
 python "tools/create_coco_tf_record.py" \
   --logtostderr \
-  --train_image_file="${raw_data}/train2017.zip" \
-  --val_image_file="${raw_data}/val2017.zip" \
   --train_scenegraph_annotations_file="${raw_data}/annotations/scenegraphs_train2017.json" \
   --val_scenegraph_annotations_file="${raw_data}/annotations/scenegraphs_val2017.json" \
-  --proposal_nparray_directory="${raw_data}/proposals" \
+  --proposal_npz_directory="${raw_data}/frcnn_proposals" \
   --output_directory="${raw_data}/tfrecords"
 
 exit 0
