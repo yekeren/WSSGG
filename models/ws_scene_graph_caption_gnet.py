@@ -728,6 +728,43 @@ class WSSceneGraphCaptionGNet(model_base.ModelBase):
                          1e-10 + tf.reduce_sum(phrase_mask, 2, keepdims=True))
     return phrase_embs
 
+  def get_pseudo_triplets_from_inputs(self, inputs):
+    """Extracts text triplets from inputs dict.
+
+    WSSceneGraphCaptionGNet model shall use `scene_text_graph`.
+
+    Args:
+      inputs: A dictionary of input tensors keyed by names.
+
+    Returns:
+      n_triple: A [batch] tensor denoting the triples in each image.
+      subject_ids: A [batch, max_n_triple] int tensor.
+      predicate_ids: A [batch, max_n_triple] int tensor.
+      object_ids: A [batch, max_n_triple] int tensor.
+    """
+    # We do not use `n_edge`, since using `n_relation` rules out attributes.
+    n_triple = inputs['scene_text_graph/n_relation']
+    nodes = inputs['scene_text_graph/nodes']
+    edges = inputs['scene_text_graph/edges']
+    senders = inputs['scene_text_graph/senders']
+    receivers = inputs['scene_text_graph/receivers']
+
+    batch = n_triple.shape[0].value
+    max_n_edge = tf.shape(edges)[1]
+
+    (pseudo_node_labels,
+     pseudo_edge_labels) = self._extract_node_and_edge_labels(nodes, edges)
+
+    batch_indices = tf.broadcast_to(tf.expand_dims(tf.range(batch), 1),
+                                    [batch, max_n_edge])
+    sender_indices = tf.stack([batch_indices, senders], -1)
+    receiver_indices = tf.stack([batch_indices, receivers], -1)
+
+    subject_ids = tf.gather_nd(pseudo_node_labels, sender_indices)
+    object_ids = tf.gather_nd(pseudo_node_labels, receiver_indices)
+    predicate_ids = pseudo_edge_labels
+    return n_triple, subject_ids, predicate_ids, object_ids
+
   def build_losses(self, inputs, predictions, **kwargs):
     """Computes loss tensors.
 
@@ -757,21 +794,13 @@ class WSSceneGraphCaptionGNet(model_base.ModelBase):
     max_n_proposal = tf.shape(proposals)[1]
     max_n_edge = tf.shape(edges)[1]
 
-    # Get the pseudo text triplet.
-    # - n_triple = [batch], we use #relation but rule out #attributes.
-    # - subject_ids/object_ids/predicate_ids = [batch, max_n_edge]
-    n_triple = inputs['scene_text_graph/n_relation']
-    pseudo_node_labels, pseudo_edge_labels = self._extract_node_and_edge_labels(
-        nodes, edges)
+    (n_triple, subject_ids, predicate_ids,
+     object_ids) = self.get_pseudo_triplets_from_inputs(inputs)
 
     batch_indices = tf.broadcast_to(tf.expand_dims(tf.range(batch), 1),
                                     [batch, max_n_edge])
     sender_indices = tf.stack([batch_indices, senders], -1)
     receiver_indices = tf.stack([batch_indices, receivers], -1)
-
-    subject_ids = tf.gather_nd(pseudo_node_labels, sender_indices)
-    object_ids = tf.gather_nd(pseudo_node_labels, receiver_indices)
-    predicate_ids = pseudo_edge_labels
 
     # Compute the initial node/edge embeddings.
     # - node_embs = [batch, max_n_node, dims].
@@ -928,7 +957,7 @@ class WSSceneGraphCaptionGNet(model_base.ModelBase):
     """
     metric_dict = {}
 
-    # Parse ground-truth annotations.
+    # Get ground-truth annotations, NOT the pseudo ones in the `build_losses`.
     n_proposal = inputs['image/n_proposal']
     proposals = inputs['image/proposal']
     batch = n_proposal.shape[0]
@@ -947,19 +976,6 @@ class WSSceneGraphCaptionGNet(model_base.ModelBase):
 
     gt_subject_box = inputs['scene_graph/subject/box']
     gt_object_box = inputs['scene_graph/object/box']
-
-    # # Compute the entity classification accuracy.
-    # subject_logits = predictions['pseudo/logits_entity_given_subject']
-    # object_logits = predictions['pseudo/logits_entity_given_object']
-
-    # for name, labels, logits in [
-    #     ('metrics/predict_subject', subject_ids, subject_logits),
-    #     ('metrics/predict_object', object_ids, object_logits),
-    # ]:
-    #   bingo = tf.equal(tf.cast(tf.argmax(logits, -1), tf.int32), labels)
-    #   accuracy_metric = tf.keras.metrics.Mean()
-    #   accuracy_metric.update_state(bingo)
-    #   metric_dict[name] = accuracy_metric
 
     # Compute the object detection metrics.
     eval_dict = {

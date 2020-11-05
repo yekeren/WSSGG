@@ -617,11 +617,9 @@ class WSSceneGraphRnnRefine(model_base.ModelBase):
     """
     loss_dict = self._proposal_network.build_losses(inputs, predictions)
 
-    subject_ids = self.entity2id(inputs['scene_graph/subject'])
-    object_ids = self.entity2id(inputs['scene_graph/object'])
-    predicate_ids = self.predicate2id(inputs['scene_graph/predicate'])
+    (n_triple, subject_ids, predicate_ids, object_ids
+    ) = self._proposal_network.get_pseudo_triplets_from_inputs(inputs)
 
-    n_triple = inputs['scene_graph/n_triple']
     max_n_triple = tf.shape(subject_ids)[1]
     shared_hidden = predictions['features/shared_hidden']
 

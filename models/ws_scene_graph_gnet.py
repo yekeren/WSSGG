@@ -738,6 +738,58 @@ class WSSceneGraphGNet(model_base.ModelBase):
                                         max_norm=max_norm)
     return embeddings
 
+  def get_pseudo_triplets_from_inputs(self, inputs):
+    """Extracts text triplets from inputs dict.
+
+    WSSceneGraphGNet model shall use `scene_pseudo_graph`.
+
+    Args:
+      inputs: A dictionary of input tensors keyed by names.
+
+    Returns:
+      n_triple: A [batch] tensor denoting the triples in each image.
+      subject_ids: A [batch, max_n_triple] int tensor.
+      predicate_ids: A [batch, max_n_triple] int tensor.
+      object_ids: A [batch, max_n_triple] int tensor.
+    """
+    n_node = inputs['scene_pseudo_graph/n_node']
+    n_edge = inputs['scene_pseudo_graph/n_edge']
+    nodes = inputs['scene_pseudo_graph/nodes']
+    edges = inputs['scene_pseudo_graph/edges']
+    senders = inputs['scene_pseudo_graph/senders']
+    receivers = inputs['scene_pseudo_graph/receivers']
+
+    batch = n_edge.shape[0].value
+    max_n_edge = tf.shape(edges)[1]
+
+    batch_indices = tf.broadcast_to(tf.expand_dims(tf.range(batch), 1),
+                                    [batch, max_n_edge])
+    sender_indices = tf.stack([batch_indices, senders], -1)
+    receiver_indices = tf.stack([batch_indices, receivers], -1)
+
+    edge_mask = tf.sequence_mask(n_edge, maxlen=max_n_edge)
+
+    subject_label = tf.gather_nd(nodes, sender_indices)
+    subject_label = tf.where(edge_mask, subject_label,
+                             tf.zeros_like(subject_label, dtype=tf.string))
+    object_label = tf.gather_nd(nodes, receiver_indices)
+    object_label = tf.where(edge_mask, object_label,
+                            tf.zeros_like(object_label, dtype=tf.string))
+
+    assert_cond = tf.reduce_all([
+        tf.reduce_all(tf.equal(n_edge, inputs['scene_graph/n_triple'])),
+        tf.reduce_all(tf.equal(subject_label, inputs['scene_graph/subject'])),
+        tf.reduce_all(tf.equal(object_label, inputs['scene_graph/object'])),
+        tf.reduce_all(tf.equal(edges, inputs['scene_graph/predicate']))
+    ])
+    assert_op = tf.Assert(assert_cond,
+                          ['Pseudo graph should be identical to triplets.'])
+    with tf.control_dependencies([assert_op]):
+      subject_ids = self.entity2id(subject_label)
+      object_ids = self.entity2id(object_label)
+      predicate_ids = self.predicate2id(edges)
+    return n_edge, subject_ids, predicate_ids, object_ids
+
   def build_losses(self, inputs, predictions, **kwargs):
     """Computes loss tensors.
 
@@ -754,9 +806,6 @@ class WSSceneGraphGNet(model_base.ModelBase):
     n_proposal = inputs['image/n_proposal']
     proposals = inputs['image/proposal']
 
-    batch = n_proposal.shape[0]
-    max_n_proposal = tf.shape(proposals)[1]
-
     # Parse pseudo graph annotations.
     n_node = inputs['scene_pseudo_graph/n_node']
     n_edge = inputs['scene_pseudo_graph/n_edge']
@@ -765,7 +814,21 @@ class WSSceneGraphGNet(model_base.ModelBase):
     senders = inputs['scene_pseudo_graph/senders']
     receivers = inputs['scene_pseudo_graph/receivers']
 
-    # Using graph network to update node and edge embeddings.
+    batch = n_proposal.shape[0]
+    max_n_proposal = tf.shape(proposals)[1]
+    max_n_edge = tf.shape(edges)[1]
+
+    (n_triple, subject_ids, predicate_ids,
+     object_ids) = self.get_pseudo_triplets_from_inputs(inputs)
+
+    batch_indices = tf.broadcast_to(tf.expand_dims(tf.range(batch), 1),
+                                    [batch, max_n_edge])
+    sender_indices = tf.stack([batch_indices, senders], -1)
+    receiver_indices = tf.stack([batch_indices, receivers], -1)
+
+    # Compute the initial node/edge embeddings.
+    # - node_embs = [batch, max_n_node, dims].
+    # - edge_embs = [batch, max_n_edge, dims].
     max_norm = None
     if self.options.HasField('graph_initial_embedding_max_norm'):
       max_norm = self.options.graph_initial_embedding_max_norm
@@ -783,10 +846,11 @@ class WSSceneGraphGNet(model_base.ModelBase):
         max_norm=max_norm,
         trainable=self.options.train_graph_initial_embedding)
 
-    tgnet = graph_networks.build_graph_network(self.options.text_graph_network,
-                                               is_training=self.is_training)
+    # Using graph network to update node and edge embeddings.
+    graph_network = graph_networks.build_graph_network(
+        self.options.text_graph_network, is_training=self.is_training)
     with slim.arg_scope(self.arg_scope_fn()):
-      updated_node_embs, updated_edge_embs = tgnet.compute_graph_embeddings(
+      updated_node_embs, updated_edge_embs = graph_network.compute_graph_embeddings(
           n_node,
           n_edge,
           node_embs,
@@ -796,12 +860,8 @@ class WSSceneGraphGNet(model_base.ModelBase):
           regularizer=hyperparams._build_slim_regularizer(
               self.options.fc_hyperparams.regularizer),
       )
-
-    # Parse triplets from pseudo graph.
-    (n_triple, subject_ids, object_ids, predicate_ids, subject_text_embs,
-     object_text_embs) = self._get_triplets_from_pseudo_graph(
-         n_node, n_edge, nodes, updated_node_embs, edges, senders, receivers,
-         inputs)
+    subject_text_embs = tf.gather_nd(updated_node_embs, sender_indices)
+    object_text_embs = tf.gather_nd(updated_node_embs, receiver_indices)
 
     # Multiple Entity Detection (MED).
     # - `initial_detection_scores`=[batch, max_n_proposal, n_entity].
