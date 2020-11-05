@@ -31,9 +31,10 @@ class SceneGraphTextGraphReaderTest(tf.test.TestCase):
 
   def test_get_input_fn(self):
     batch_size = 17
+    # input_pattern: "data-vspnet/tfrecords/caption-graph-hanwang/val.tfrecord-00000-of-00001"
     options_str = r"""
       scene_graph_text_graph_reader {
-        input_pattern: "data-vspnet/tfrecords/caption-graph-hanwang/val.tfrecord-00000-of-00001"
+        input_pattern: "data-mscoco/tfrecords/scenegraphs_train2017.tfreocrd-00000-of-00020"
         batch_size: %i
         shuffle_buffer_size: 500
         prefetch_buffer_size: 500

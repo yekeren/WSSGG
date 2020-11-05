@@ -38,47 +38,81 @@ def _parse_single_example(example, options):
   """
   # Initialize `keys_to_features`.
   example_fmt = {
-      'id': tf.io.FixedLenFeature([], tf.int64),
+      'id':
+          tf.io.FixedLenFeature([], tf.int64),
       # Proposals
-      'image/n_proposal': tf.io.FixedLenFeature([], tf.int64),
-      'image/proposal/bbox/ymin': tf.io.VarLenFeature(tf.float32),
-      'image/proposal/bbox/xmin': tf.io.VarLenFeature(tf.float32),
-      'image/proposal/bbox/ymax': tf.io.VarLenFeature(tf.float32),
-      'image/proposal/bbox/xmax': tf.io.VarLenFeature(tf.float32),
-      'image/proposal/feature': tf.io.VarLenFeature(tf.float32),
+      'image/n_proposal':
+          tf.io.FixedLenFeature([], tf.int64),
+      'image/proposal/bbox/ymin':
+          tf.io.VarLenFeature(tf.float32),
+      'image/proposal/bbox/xmin':
+          tf.io.VarLenFeature(tf.float32),
+      'image/proposal/bbox/ymax':
+          tf.io.VarLenFeature(tf.float32),
+      'image/proposal/bbox/xmax':
+          tf.io.VarLenFeature(tf.float32),
+      'image/proposal/feature':
+          tf.io.VarLenFeature(tf.float32),
       # Scene graph triplets.
-      'scene_graph/n_triple': tf.io.FixedLenFeature([], tf.int64),
+      'scene_graph/n_triple':
+          tf.io.FixedLenFeature([], tf.int64, default_value=0),
       # - Predicate.
-      'scene_graph/predicate': tf.io.VarLenFeature(tf.string),
+      'scene_graph/predicate':
+          tf.io.VarLenFeature(tf.string),
       # - Subject.
-      'scene_graph/subject': tf.io.VarLenFeature(tf.string),
-      'scene_graph/subject/bbox/ymin': tf.io.VarLenFeature(tf.float32),
-      'scene_graph/subject/bbox/xmin': tf.io.VarLenFeature(tf.float32),
-      'scene_graph/subject/bbox/ymax': tf.io.VarLenFeature(tf.float32),
-      'scene_graph/subject/bbox/xmax': tf.io.VarLenFeature(tf.float32),
+      'scene_graph/subject':
+          tf.io.VarLenFeature(tf.string),
+      'scene_graph/subject/bbox/ymin':
+          tf.io.VarLenFeature(tf.float32),
+      'scene_graph/subject/bbox/xmin':
+          tf.io.VarLenFeature(tf.float32),
+      'scene_graph/subject/bbox/ymax':
+          tf.io.VarLenFeature(tf.float32),
+      'scene_graph/subject/bbox/xmax':
+          tf.io.VarLenFeature(tf.float32),
       # - Object.
-      'scene_graph/object': tf.io.VarLenFeature(tf.string),
-      'scene_graph/object/bbox/ymin': tf.io.VarLenFeature(tf.float32),
-      'scene_graph/object/bbox/xmin': tf.io.VarLenFeature(tf.float32),
-      'scene_graph/object/bbox/ymax': tf.io.VarLenFeature(tf.float32),
-      'scene_graph/object/bbox/xmax': tf.io.VarLenFeature(tf.float32),
+      'scene_graph/object':
+          tf.io.VarLenFeature(tf.string),
+      'scene_graph/object/bbox/ymin':
+          tf.io.VarLenFeature(tf.float32),
+      'scene_graph/object/bbox/xmin':
+          tf.io.VarLenFeature(tf.float32),
+      'scene_graph/object/bbox/ymax':
+          tf.io.VarLenFeature(tf.float32),
+      'scene_graph/object/bbox/xmax':
+          tf.io.VarLenFeature(tf.float32),
       # Scene graph pseudo graph.
-      'scene_pseudo_graph/n_node': tf.io.FixedLenFeature([], tf.int64),
-      'scene_pseudo_graph/n_edge': tf.io.FixedLenFeature([], tf.int64),
-      'scene_pseudo_graph/nodes': tf.io.VarLenFeature(tf.string),
-      'scene_pseudo_graph/edges': tf.io.VarLenFeature(tf.string),
-      'scene_pseudo_graph/senders': tf.io.VarLenFeature(tf.int64),
-      'scene_pseudo_graph/receivers': tf.io.VarLenFeature(tf.int64),
+      'scene_pseudo_graph/n_node':
+          tf.io.FixedLenFeature([], tf.int64, default_value=0),
+      'scene_pseudo_graph/n_edge':
+          tf.io.FixedLenFeature([], tf.int64, default_value=0),
+      'scene_pseudo_graph/nodes':
+          tf.io.VarLenFeature(tf.string),
+      'scene_pseudo_graph/edges':
+          tf.io.VarLenFeature(tf.string),
+      'scene_pseudo_graph/senders':
+          tf.io.VarLenFeature(tf.int64),
+      'scene_pseudo_graph/receivers':
+          tf.io.VarLenFeature(tf.int64),
       # Scene graph text graph.
-      'scene_text_graph/caption': tf.io.VarLenFeature(tf.string),
-      'scene_text_graph/n_entity': tf.io.VarLenFeature(tf.int64),
-      'scene_text_graph/n_relation': tf.io.VarLenFeature(tf.int64),
-      'scene_text_graph/n_node': tf.io.VarLenFeature(tf.int64),
-      'scene_text_graph/n_edge': tf.io.VarLenFeature(tf.int64),
-      'scene_text_graph/nodes': tf.io.VarLenFeature(tf.string),
-      'scene_text_graph/edges': tf.io.VarLenFeature(tf.string),
-      'scene_text_graph/senders': tf.io.VarLenFeature(tf.int64),
-      'scene_text_graph/receivers': tf.io.VarLenFeature(tf.int64),
+      'scene_text_graph/caption':
+          tf.io.VarLenFeature(tf.string),
+      'scene_text_graph/n_entity':
+          tf.io.VarLenFeature(tf.int64),
+      'scene_text_graph/n_relation':
+          tf.io.VarLenFeature(tf.int64),
+      'scene_text_graph/n_node':
+          tf.io.VarLenFeature(tf.int64),
+      'scene_text_graph/n_edge':
+          tf.io.VarLenFeature(tf.int64),
+      'scene_text_graph/nodes':
+          tf.io.VarLenFeature(tf.string),
+      'scene_text_graph/edges':
+          tf.io.VarLenFeature(tf.string),
+      'scene_text_graph/senders':
+          tf.io.VarLenFeature(tf.int64),
+      'scene_text_graph/receivers':
+          tf.io.VarLenFeature(tf.int64),
   }
 
   parsed = tf.parse_single_example(example, example_fmt)
