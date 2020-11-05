@@ -2,9 +2,9 @@
 
 * [Preparing code base](#preparing-code-base)
 * [Preparing datasets](#preparing-datasets)
-    - [Setup the text parser from Stanford Scene Graph Parser](#setup-the-text-parser-from-stanford-scene-graph-parser)
-    - [Extract text graphs from the VG captions](#extract-text-graphs-from-the-vg-captions)
+    - [Set up the text parser from Stanford Scene Graph Parser](#setup-the-text-parser-from-stanford-scene-graph-parser)
     - [Set up experimental data following VSPNet](#set-up-experimental-data-following-vspnet)
+    - [Set up experimental data of COCO captions](#set-up-experimental-data-of-coco-captions)
 * [Training](#training)
 * [Evaluation](#evaluation)
 
@@ -60,6 +60,12 @@ The following scripts shall download the data needed and generate .tfrecord file
 
 ```
 sh download_and_prepare_vspnet_experiments.sh "data-vspnet"
+```
+
+### Set up experimental data of COCO captions
+
+```
+sh "tools/download_and_preprocess_mscoco.sh" "data-mcoco"
 ```
 
 ## Training
