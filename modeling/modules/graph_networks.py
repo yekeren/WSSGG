@@ -339,8 +339,8 @@ class GNetMPNN(_base.AbstractModule):
   def _build(self,
              input_graph,
              hidden_size=50,
-             dropout_rate=0.5,
              attn_scale=1.0,
+             attn_dropout_keep_prob=1.0,
              regularizer=None,
              is_training=False):
 
@@ -363,9 +363,11 @@ class GNetMPNN(_base.AbstractModule):
     tf.summary.histogram('mpnn/edge_values', edge_values)
 
     logits_block = blocks.EdgeBlock(
-        edge_model_fn=lambda: snt.nets.MLP(output_sizes=[hidden_size, 1],
-                                           activation=tf.nn.tanh,
-                                           regularizers={'w': regularizer}),
+        edge_model_fn=lambda: snt.Linear(output_size=1,
+                                         regularizers={'w': regularizer}),
+        # edge_model_fn=lambda: snt.nets.MLP(output_sizes=[hidden_size, 1],
+        #                                    activation=tf.nn.tanh,
+        #                                    regularizers={'w': regularizer}),
         use_edges=True,
         use_receiver_nodes=True,
         use_sender_nodes=True,
@@ -377,6 +379,9 @@ class GNetMPNN(_base.AbstractModule):
     normalized_attention_weight = modules._received_edges_normalizer(
         input_graph.replace(edges=attention_weights_logits),
         normalizer=self._normalizer)
+    normalized_attention_weight = slim.dropout(normalized_attention_weight,
+                                               attn_dropout_keep_prob,
+                                               is_training=is_training)
 
     # Attending to sender values according to the weights.
     # - attended_edges = [total_num_edges, value_dims]
@@ -410,7 +415,7 @@ class MessagePassing(GraphNet):
 
     self.use_reverse_edges = options.use_reverse_edges
     self.add_bi_directional_edges = options.add_bi_directional_edges
-    self.add_self_loop_edges = False
+    self.add_self_loop_edges = True
 
   def _build_graph(self, graphs_tuple, regularizer):
     """Builds graph network.
@@ -422,44 +427,58 @@ class MessagePassing(GraphNet):
     Returns:
       output_graphs_tuple: A updated GraphTuple instance.
     """
-    # Initial RNN states.
-    rnn_nodes = snt.GRU(hidden_size=graphs_tuple.nodes.shape[-1].value,
-                        name='node_rnn')
-    rnn_edges = snt.GRU(hidden_size=graphs_tuple.edges.shape[-1].value,
-                        name='edge_rnn')
-    node_states = rnn_nodes.initial_state(
-        batch_size=tf.shape(graphs_tuple.nodes)[0])
-    edge_states = rnn_edges.initial_state(
-        batch_size=tf.shape(graphs_tuple.edges)[0])
+    original_nodes = graphs_tuple.nodes
+    original_edges = graphs_tuple.edges
 
-    _, node_states = rnn_nodes(graphs_tuple.nodes, node_states)
-    _, edge_states = rnn_edges(graphs_tuple.edges, edge_states)
-    graphs_tuple = graphs_tuple.replace(nodes=node_states, edges=edge_states)
+    # # Initial RNN states.
+    # rnn_nodes = snt.GRU(hidden_size=graphs_tuple.nodes.shape[-1].value,
+    #                     name='node_rnn')
+    # rnn_edges = snt.GRU(hidden_size=graphs_tuple.edges.shape[-1].value,
+    #                     name='edge_rnn')
+    # # if self.is_training:
+    # #   rnn_nodes = snt.RecurrentDropoutWrapper(
+    # #       rnn_nodes, self.options.rnn_dropout_keep_prob)
+    # #   rnn_edges = snt.RecurrentDropoutWrapper(
+    # #       rnn_edges, self.options.rnn_dropout_keep_prob)
+
+    # node_states = rnn_nodes.initial_state(
+    #     batch_size=tf.shape(graphs_tuple.nodes)[0])
+    # edge_states = rnn_edges.initial_state(
+    #     batch_size=tf.shape(graphs_tuple.edges)[0])
+
+    # _, node_states = rnn_nodes(graphs_tuple.nodes, node_states)
+    # _, edge_states = rnn_edges(graphs_tuple.edges, edge_states)
+    # graphs_tuple = graphs_tuple.replace(nodes=node_states, edges=edge_states)
 
     # Stack layers.
     network = GNetMPNN()
     for _ in range(self.options.n_layer):
-      graphs_tuple = network(graphs_tuple,
-                             hidden_size=self.options.hidden_size,
-                             regularizer=regularizer,
-                             attn_scale=self.options.attn_scale,
-                             is_training=self.is_training)
-      _, node_states = rnn_nodes(graphs_tuple.nodes, node_states)
-      _, edge_states = rnn_edges(graphs_tuple.edges, edge_states)
-      graphs_tuple = graphs_tuple.replace(nodes=node_states, edges=edge_states)
+      graphs_tuple = network(
+          graphs_tuple,
+          hidden_size=self.options.hidden_size,
+          regularizer=regularizer,
+          attn_scale=self.options.attn_scale,
+          attn_dropout_keep_prob=self.options.attn_dropout_keep_prob,
+          is_training=self.is_training)
+      # _, node_states = rnn_nodes(graphs_tuple.nodes, node_states)
+      # _, edge_states = rnn_edges(graphs_tuple.edges, edge_states)
+      # graphs_tuple = graphs_tuple.replace(nodes=node_states, edges=edge_states)
 
-    # Projectthe RNN states.
-    node_states = slim.fully_connected(
-        graphs_tuple.nodes,
-        num_outputs=graphs_tuple.nodes.shape[-1].value,
-        activation_fn=None,
-        scope='fc_nodes')
-    edge_states = slim.fully_connected(
-        graphs_tuple.edges,
-        num_outputs=graphs_tuple.edges.shape[-1].value,
-        activation_fn=None,
-        scope='fc_edges')
-    graphs_tuple = graphs_tuple.replace(nodes=node_states, edges=edge_states)
+    # # Projectthe RNN states.
+    # node_states = slim.fully_connected(
+    #     graphs_tuple.nodes,
+    #     num_outputs=graphs_tuple.nodes.shape[-1].value,
+    #     activation_fn=None,
+    #     scope='fc_nodes')
+    # edge_states = slim.fully_connected(
+    #     graphs_tuple.edges,
+    #     num_outputs=graphs_tuple.edges.shape[-1].value,
+    #     activation_fn=None,
+    #     scope='fc_edges')
+    if self.options.n_layer:
+      graphs_tuple = graphs_tuple.replace(
+          nodes=original_nodes + graphs_tuple.nodes,
+          edges=original_edges + graphs_tuple.edges)
     return graphs_tuple
 
 
