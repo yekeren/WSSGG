@@ -312,13 +312,31 @@ def _test(pipeline_proto, model_dir):
       checkpoint_number = max(int(m.group(1)), checkpoint_number)
 
   if checkpoint_number > 0:
-    checkpoint_path = os.path.join(checkpoint_dir,
-                                   'model.ckpt-%d' % checkpoint_number)
-    logging.info('Found the best checkpoint %s.', checkpoint_path)
+    testing_result_csv_file = os.path.join(checkpoint_dir,
+                                           'testing_result_file.csv')
 
-    estimator.evaluate(eval_input_fn,
-                       checkpoint_path=checkpoint_path,
-                       steps=30000)
+    # Do not re-evaluate if previous testing result is found.
+    if os.path.isfile(testing_result_csv_file):
+      logging.info('Found previous testing results %s.',
+                   testing_result_csv_file)
+
+    # Evaluate the best checkpoint on the test set.
+    else:
+      checkpoint_path = os.path.join(checkpoint_dir,
+                                     'model.ckpt-%d' % checkpoint_number)
+      logging.info('Found the best checkpoint %s.', checkpoint_path)
+
+      metrics = estimator.evaluate(eval_input_fn,
+                                   checkpoint_path=checkpoint_path,
+                                   steps=30000)
+      keys = [
+          key for key in sorted(metrics.keys()) if key.startswith('metrics')
+      ]
+      with open(testing_result_csv_file, 'w') as f:
+        f.write(','.join(keys) + '\n')
+        f.write(','.join(['%.4lf' % metrics[key] for key in keys]) + '\n')
+      logging.info('Testing results are written to %s.',
+                   testing_result_csv_file)
 
 
 def evaluate(pipeline_proto, model_dir, testing=False):
