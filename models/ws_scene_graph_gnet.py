@@ -217,6 +217,7 @@ class WSSceneGraphGNet(model_base.ModelBase):
     # - logits_entity_given_proposal = [batch, max_n_proposal, n_entity].
     weights_initializer = tf.compat.v1.constant_initializer(
         self.entity_emb_weights.transpose())
+    weights_initializer = None
     with slim.arg_scope(self.arg_scope_fn()):
       logits_entity_given_proposal = slim.fully_connected(
           proposal_features,
