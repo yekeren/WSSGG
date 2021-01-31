@@ -22,11 +22,17 @@ from models.ws_scene_graph import WSSceneGraph
 from models.ws_scene_graph_gnet import WSSceneGraphGNet
 from models.ws_scene_graph_caption_gnet import WSSceneGraphCaptionGNet
 from models.ws_scene_graph_rnn_refine import WSSceneGraphRnnRefine
+from models.ws_scene_graph_rnn_refine_v2 import WSSceneGraphRnnRefineV2
+from models.ws_sggen_ling import WSSGGenLing
+from models.cap2sg_grounding import Cap2SGGrounding
 
 MODELS = {
+    model_pb2.Cap2SGGrounding.ext: Cap2SGGrounding,
     model_pb2.WSSceneGraph.ext: WSSceneGraph,
+    model_pb2.WSSGGenLing.ext: WSSGGenLing,
     model_pb2.WSSceneGraphGNet.ext: WSSceneGraphGNet,
     model_pb2.WSSceneGraphRnnRefine.ext: WSSceneGraphRnnRefine,
+    model_pb2.WSSceneGraphRnnRefineV2.ext: WSSceneGraphRnnRefineV2,
     model_pb2.WSSceneGraphCaptionGNet.ext: WSSceneGraphCaptionGNet,
 }
 
