@@ -374,7 +374,6 @@ class Cap2SGGrounding(model_base.ModelBase):
         'grounding/attribute/labels':
             attribute_labels[:, :, 1:],
     }
-
     return predictions
 
   def _compute_cross_entropy_loss(self, n_node, logits, labels):
@@ -388,21 +387,6 @@ class Cap2SGGrounding(model_base.ModelBase):
     Returns:
       A scalar loss tensor.
     """
-    # # Create mask to drop unlabeled example (e.g., OOV entity name, no attributes).
-    # #   label_mask shape = [batch, max_n_node].
-    # node_mask = tf.sequence_mask(n_node, tf.shape(logits)[1], dtype=tf.float32)
-    # label_mask = tf.cast(tf.greater(tf.reduce_sum(labels, -1), 0), tf.float32)
-    # label_mask = tf.multiply(label_mask, node_mask)
-
-    # # Apply focal cross-entropy loss.
-    # per_entity_losses = sigmoid_focal_crossentropy(labels, logits)
-    # per_example_losses = masked_ops.masked_sum(per_entity_losses,
-    #                                            mask=label_mask,
-    #                                            dim=1)
-    # loss = tf.div(tf.reduce_sum(per_example_losses),
-    #               1e-6 + tf.reduce_sum(label_mask))
-    # return loss
-
     # Create mask to drop unlabeled example (e.g., OOV entity name, no attributes).
     #   label_mask shape = [batch, max_n_node].
     node_mask = tf.sequence_mask(n_node, tf.shape(logits)[1], dtype=tf.float32)
