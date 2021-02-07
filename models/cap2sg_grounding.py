@@ -24,8 +24,6 @@ from __future__ import print_function
 
 from absl import logging
 
-import json
-
 import numpy as np
 import tensorflow as tf
 
@@ -33,30 +31,14 @@ import tf_slim as slim
 
 from protos import model_pb2
 
-import sonnet as snt
-from graph_nets import graphs
-from graph_nets import modules
-from graph_nets import blocks
-from graph_nets import _base
-from graph_nets import utils_tf
-
-from models.graph_mps import GraphMPS
-from models.graph_nms import GraphNMS
-
 from modeling.layers import id_to_token
 from modeling.layers import token_to_id
-from modeling.modules import graph_networks
-from modeling.utils import box_ops
-from modeling.utils import hyperparams
 from modeling.utils import masked_ops
 
 from models import model_base
-from models import utils
 
-from object_detection.metrics import coco_evaluation
-from object_detection.core import standard_fields
-
-from model_utils.scene_graph_evaluation import SceneGraphEvaluator
+from bert.modeling import transformer_model
+import tensorflow.keras.backend as K
 
 
 def parse_entity_and_attributes(entity_and_attributes):
@@ -91,12 +73,10 @@ def parse_entity_and_attributes(entity_and_attributes):
   return entity, n_attribute, attributes
 
 
-def compute_entity_repr_with_attributes(entity, per_entity_n_attribute,
-                                        per_entity_attributes):
+def compute_attribute_embeddings(per_entity_n_attribute, per_entity_attributes):
   """Computes node embeddings.
 
   Args:
-    entity: A [batch, max_n_entity, dims] string tensor.
     per_entity_n_attribute: A [batch, max_n_entity] int tensor.
     per_entity_attributes: A [batch, max_n_entity, max_n_attribute, dims] tensor.
 
@@ -111,8 +91,116 @@ def compute_entity_repr_with_attributes(entity, per_entity_n_attribute,
   attr_repr = masked_ops.masked_sum_nd(per_entity_attributes,
                                        attribute_masks,
                                        dim=2)
-  entity_with_attributes = tf.squeeze(attr_repr, 2) + entity
-  return entity_with_attributes
+  return tf.squeeze(attr_repr, 2)
+
+
+def compute_attention(class_embs, attention_head, attention_mask):
+  """Predicts attention score.
+  
+  Assuming attention model SOFTMAX(Q K) V.
+  class_embs, attention_head are analogous to Q and K.
+  This function returns SOFTMAX(Q K)
+
+  Args:
+    class_embs: A [batch, max_n_node, dims] float tensor.
+    attention_head: A [batch, max_n_proposal, dims] float tensor.
+    attention_mask: A [batch, 1, max_n_proposal] float tensor.
+
+  Returns:
+    attention_score: A [batch, max_n_node, max_n_proposal] float tensor.
+  """
+  attention_logits = tf.matmul(class_embs, attention_head, transpose_b=True)
+  return masked_ops.masked_softmax(attention_logits, attention_mask, dim=2)
+
+
+def apply_attention(attention_score, class_head, embeddings, bias):
+  """Applies attention_score for classification.
+
+  Assuming attention model SOFTMAX(Q K) V.
+  class_head is analogous to V.
+  This function based on weighted V, predict the label.
+
+  Args:
+    attention_score: A [batch, max_n_node, max_n_proposal] float tensor.
+    class_head: A [batch, max_n_proposal, dims] float tensor.
+    embeddings: A [vocab_size, dims] float tensor.
+    bias: A [vocab_size] float tensor.
+  """
+  # Compute image-level representation: SOFTMAX(Q K) V.
+  #   class_repr shape = [batch, max_n_node, dims].
+  class_repr = tf.matmul(attention_score, class_head)
+
+  # Compute image-level classification score.
+  #   class_logits shape = [batch, max_n_node, vocab_size].
+  class_logits = tf.einsum('bnd,vd->bnv', class_repr, embeddings)
+  return tf.nn.bias_add(class_logits, bias)
+
+
+def sigmoid_focal_crossentropy(y_true,
+                               y_pred,
+                               alpha=0.25,
+                               gamma=2.0,
+                               from_logits=True):
+  # Get the cross_entropy for each entry
+  ce = K.binary_crossentropy(y_true, y_pred, from_logits=from_logits)
+
+  # If logits are provided then convert the predictions into probabilities
+  if from_logits:
+    pred_prob = tf.sigmoid(y_pred)
+  else:
+    pred_prob = y_pred
+
+  p_t = (y_true * pred_prob) + ((1 - y_true) * (1 - pred_prob))
+  alpha_factor = 1.0
+  modulating_factor = 1.0
+
+  if alpha:
+    alpha = tf.convert_to_tensor(alpha, dtype=K.floatx())
+    alpha_factor = y_true * alpha + (1 - y_true) * (1 - alpha)
+
+  if gamma:
+    gamma = tf.convert_to_tensor(gamma, dtype=K.floatx())
+    modulating_factor = tf.pow((1.0 - p_t), gamma)
+
+  # compute the final loss and return
+  return tf.reduce_sum(alpha_factor * modulating_factor * ce, axis=-1)
+
+
+def load_glove(glove_vocabulary_file, glove_embedding_file):
+  """Loads GloVe embedding vectors.
+
+  Args:
+    glove_vocabulary_file: GloVe vocabulary file.
+    glove_embedding_file: GloVe word embedding file.
+
+  Returns:
+    glove_dict: GloVe embeddings. A dict keyed by tokens.
+  """
+  glove_vectors = np.load(glove_embedding_file).astype(np.float32)
+  with tf.gfile.GFile(glove_vocabulary_file, 'r') as f:
+    glove_tokens = [x.strip('\n') for x in f]
+  return dict((k, v) for k, v in zip(glove_tokens, glove_vectors))
+
+
+def initialize_from_glove(glove_dict, token2id, embedding_dims):
+  """Initializes token embeddings from GloVe.
+
+  Args:
+    glove_dict: GloVe embeddings. A dict keyed by tokens.
+    token2id: A dict mapping from multi-words tokens to id.
+    embedding_dims: embedding dimensions.
+
+  Returns:
+    embeddings: A [len(token2id), embedding_dims] np.float32 array.
+  """
+
+  embeddings = np.zeros((len(token2id), embedding_dims), dtype=np.float32)
+
+  for multi_word_token, token_id in token2id.items():
+    for word in multi_word_token.split(' '):
+      if word in glove_dict:
+        embeddings[token_id] += glove_dict[word]
+  return embeddings
 
 
 class Cap2SGGrounding(model_base.ModelBase):
@@ -120,32 +208,57 @@ class Cap2SGGrounding(model_base.ModelBase):
 
   def __init__(self, options, is_training):
     """Constructs the Cap2SGGrounding instance. """
-    super(Cap2SGGrounding, self).__init__(options, is_training)
-
     if not isinstance(options, model_pb2.Cap2SGGrounding):
       raise ValueError('Options has to be an Cap2SGGrounding proto.')
+    super(Cap2SGGrounding, self).__init__(options, is_training)
 
-    # Initialize the arg_scope for FC layers.
-    self.arg_scope_fn = hyperparams.build_hyperparams(options.fc_hyperparams,
-                                                      is_training)
+    # Load GloVe embeddings.
+    glove_dict = load_glove(options.glove_vocabulary_file,
+                            options.glove_embedding_file)
 
     # Initialize vocabulary.
-    token2id = {'OOV': 0}
+    token2id, id2token = {'OOV': 0}, {0: 'OOV'}
+    id_offset = 1  # ZERO is reserved for OOV.
     with open(options.vocabulary_file, 'r') as f:
-      for i, line in enumerate(f):
+      for line in f:
         token, freq = line.strip('\n').split('\t')
         if int(freq) < options.minimum_frequency:
           break
-        token2id[token] = 1 + i  # ZERO is reserved for OOV.
+        if any(word in glove_dict for word in token.split(' ')):
+          id2token[id_offset] = token
+          token2id[token] = id_offset
+          id_offset += 1
     self.vocab_size = len(token2id)
     self.token2id = token_to_id.TokenToIdLayer(token2id, oov_id=0)
+    self.id2token = id_to_token.IdToTokenLayer(id2token, oov='OOV')
 
-    # Embeddings.
-    self.embeddings = tf.get_variable(
-        'embeddings',
-        shape=[len(token2id), options.embedding_dims],
-        regularizer=None,
-        trainable=True)
+    # Create word embeddings.
+    self.embeddings = tf.get_variable('embeddings',
+                                      initializer=initialize_from_glove(
+                                          glove_dict, token2id,
+                                          options.embedding_dims),
+                                      trainable=options.embedding_trainable)
+
+    # Create the bias tensor.
+    if model_pb2.BIAS_MODE_ZERO == options.bias_mode:
+      zeros = tf.zeros(shape=[len(token2id)], dtype=tf.float32)
+      self.entity_bias = self.attribute_bias = zeros
+    elif model_pb2.BIAS_MODE_TRADITION == options.bias_mode:
+      self.entity_bias = tf.get_variable('entity_bias',
+                                         initializer=tf.zeros_initializer(),
+                                         shape=[len(token2id)],
+                                         trainable=True)
+      self.attribute_bias = tf.get_variable('attribute_bias',
+                                            initializer=tf.zeros_initializer(),
+                                            shape=[len(token2id)],
+                                            trainable=True)
+    elif model_pb2.BIAS_MODE_TRAIN_FROM_EMBEDDING == options.bias_mode:
+      self.entity_bias, self.attribute_bias = [
+          tf.squeeze(
+              tf.layers.Dense(1, activation=None, use_bias=True,
+                              name=name)(self.embeddings), -1)
+          for name in ['entity_bias', 'attribute_bias']
+      ]
 
   def predict(self, inputs, **kwargs):
     """Predicts the resulting tensors.
@@ -174,11 +287,29 @@ class Cap2SGGrounding(model_base.ModelBase):
     batch = proposals.shape[0].value
     max_n_proposal = tf.shape(proposal_features)[1]
 
-    attention_head, entity_head, attribute_head = [
+    # Linear projection.
+    entity_head, attribute_head = [
         tf.layers.Dense(self.options.embedding_dims,
-                        activation=None,
-                        use_bias=True)(proposal_features) for i in range(3)
+                        activation=tf.nn.leaky_relu,
+                        use_bias=True,
+                        name=name)(proposal_features)
+        for name in ['entity_head', 'attribute_head']
     ]
+
+    # Compute the shared attention head.
+    hidden_size = self.options.embedding_dims
+    attention_input = tf.layers.Dense(hidden_size,
+                                      activation=None,
+                                      use_bias=True,
+                                      name='bert_input')(proposal_features)
+    attention_head = transformer_model(
+        attention_input,
+        hidden_size=hidden_size,
+        num_hidden_layers=self.options.contextualization_config.
+        num_hidden_layers,
+        num_attention_heads=self.options.contextualization_config.
+        num_attention_heads,
+        intermediate_size=hidden_size)
 
     # Extract linguistic information, e.g., nodes=`suitcase:small,packed`.
     n_node, n_edge, nodes, edges, senders, receivers = (
@@ -199,47 +330,95 @@ class Cap2SGGrounding(model_base.ModelBase):
     entity_embs, per_ent_atts_embs, edges_embs = (embed_fn(entity_ids),
                                                   embed_fn(per_ent_atts_ids),
                                                   embed_fn(edges_ids))
-    node_embs = compute_entity_repr_with_attributes(entity_embs, per_ent_n_att,
-                                                    per_ent_atts_embs)
+    attribute_embs = compute_attribute_embeddings(per_ent_n_att,
+                                                  per_ent_atts_embs)
 
-    # Compute attention along the visual proposal axis.
-    #   attention = [batch, max_n_node, max_n_proposal].
-    proposal_masks = tf.expand_dims(
+    # Compute attention_mask, shape = [batch, 1, max_n_proposal].
+    attention_mask = tf.expand_dims(
         tf.sequence_mask(n_proposal, max_n_proposal, dtype=tf.float32), 1)
-    attention = tf.matmul(node_embs, attention_head, transpose_b=True)
-    attention = masked_ops.masked_softmax(attention, proposal_masks, dim=2)
 
-    # Treat top-1 box as the instance box.
-    batch_indices = tf.broadcast_to(tf.expand_dims(tf.range(batch), 1),
-                                    [batch, max_n_node])
-    box_indices = tf.math.argmax(attention, axis=2, output_type=tf.int32)
-    box_indices = tf.stack([batch_indices, box_indices], -1)
-    predictions = {
-        'grounding/entity_boxes': tf.gather_nd(proposals, box_indices),
-        'grounding/entity_scores': tf.reduce_max(attention, 2),
-    }
-
-    # Compute the classification logits from the entity and attribute heads.
-    #   entity_labels/attribute_labels = [batch, max_n_node, vocab_size].
+    # One-hot encoding of both entity and attribute labels.
     entity_labels = tf.one_hot(entity_ids, depth=self.vocab_size)
     attribute_labels = tf.reduce_max(
         tf.one_hot(per_ent_atts_ids, depth=self.vocab_size), 2)
 
-    for cls_name, cls_head, cls_labels in [
-        ('grounding/entity', entity_head, entity_labels),
-        ('grounding/attribute', attribute_head, attribute_labels)
-    ]:
-      # Attention weighting, cls_repr = [batch, max_n_node, dims].
-      cls_repr = tf.matmul(attention, cls_head)
+    # Entity attention model.
+    attention = compute_attention(entity_embs + attribute_embs, attention_head,
+                                  attention_mask)
+    entity_logits = apply_attention(attention, entity_head, self.embeddings,
+                                    self.entity_bias)
+    attribute_logits = apply_attention(attention, attribute_head,
+                                       self.embeddings, self.attribute_bias)
 
-      # Convert representation to classification logits.
-      cls_logits = tf.einsum('bnd,vd->bnv', cls_repr, self.embeddings)
-      predictions.update({
-          cls_name + '/logits': cls_logits,
-          cls_name + '/labels': cls_labels,
-      })
+    # Treat top-1 box as the instance box.
+    index_batch = tf.broadcast_to(tf.expand_dims(tf.range(batch), 1),
+                                  [batch, max_n_node])
+    index_entity_box = tf.math.argmax(attention, axis=2, output_type=tf.int32)
+    index_entity_full = tf.stack([index_batch, index_entity_box], -1)
+
+    predictions = {
+        'grounding/entity/logits':
+            entity_logits[:, :, 1:],
+        'grounding/entity/labels':
+            entity_labels[:, :, 1:],
+        'grounding/entity/id':
+            entity_ids,
+        'grounding/entity/proposal_id':
+            index_entity_box,
+        'grounding/entity/proposal_box':
+            tf.gather_nd(proposals, index_entity_full),
+        'grounding/entity/proposal_score':
+            tf.reduce_max(attention, 2),
+        'grounding/attribute/logits':
+            attribute_logits[:, :, 1:],
+        'grounding/attribute/labels':
+            attribute_labels[:, :, 1:],
+    }
 
     return predictions
+
+  def _compute_cross_entropy_loss(self, n_node, logits, labels):
+    """Computes cross-entropy loss.
+
+    Args:
+      n_node: A [batch] int tensor denoting the entity nodes in the example.
+      logits: Entity logits, A [batch, max_n_node, vocab_size - 1] float tensor.
+      labels: Entity labels, A [batch, max_n_node, vocab_size - 1] float tensor.
+
+    Returns:
+      A scalar loss tensor.
+    """
+    # # Create mask to drop unlabeled example (e.g., OOV entity name, no attributes).
+    # #   label_mask shape = [batch, max_n_node].
+    # node_mask = tf.sequence_mask(n_node, tf.shape(logits)[1], dtype=tf.float32)
+    # label_mask = tf.cast(tf.greater(tf.reduce_sum(labels, -1), 0), tf.float32)
+    # label_mask = tf.multiply(label_mask, node_mask)
+
+    # # Apply focal cross-entropy loss.
+    # per_entity_losses = sigmoid_focal_crossentropy(labels, logits)
+    # per_example_losses = masked_ops.masked_sum(per_entity_losses,
+    #                                            mask=label_mask,
+    #                                            dim=1)
+    # loss = tf.div(tf.reduce_sum(per_example_losses),
+    #               1e-6 + tf.reduce_sum(label_mask))
+    # return loss
+
+    # Create mask to drop unlabeled example (e.g., OOV entity name, no attributes).
+    #   label_mask shape = [batch, max_n_node].
+    node_mask = tf.sequence_mask(n_node, tf.shape(logits)[1], dtype=tf.float32)
+    label_mask = tf.cast(tf.greater(tf.reduce_sum(labels, -1), 0), tf.float32)
+    label_mask = tf.multiply(label_mask, node_mask)
+
+    # Normalize label and apply softmax cross-entropy loss.
+    labels = tf.div(labels, 1e-6 + tf.reduce_sum(labels, -1, keepdims=True))
+    per_entity_losses = tf.nn.softmax_cross_entropy_with_logits(labels=labels,
+                                                                logits=logits)
+    per_example_losses = masked_ops.masked_sum(per_entity_losses,
+                                               mask=label_mask,
+                                               dim=1)
+    loss = tf.div(tf.reduce_sum(per_example_losses),
+                  1e-6 + tf.reduce_sum(label_mask))
+    return loss
 
   def build_losses(self, inputs, predictions, **kwargs):
     """Computes loss tensors.
@@ -251,24 +430,20 @@ class Cap2SGGrounding(model_base.ModelBase):
     Returns:
       loss_dict: A dictionary of loss tensors keyed by names.
     """
-    # Compute entity node masks.
-    n_node, nodes = (inputs['caption_graph/n_node'],
-                     inputs['caption_graph/nodes'])
-    max_n_node = tf.shape(nodes)[1]
-    node_masks = tf.sequence_mask(n_node, max_n_node, dtype=tf.float32)
+    n_node = inputs['caption_graph/n_node']
 
     loss_dict = {}
     for cls_name in ['grounding/entity', 'grounding/attribute']:
       cls_logits = predictions[cls_name + '/logits']
       cls_labels = predictions[cls_name + '/labels']
-      per_entity_losses = tf.nn.sigmoid_cross_entropy_with_logits(
-          labels=cls_labels, logits=cls_logits)
-      per_example_losses = masked_ops.masked_sum_nd(per_entity_losses,
-                                                    mask=node_masks,
-                                                    dim=1)
-      losses = tf.div(tf.reduce_sum(per_example_losses, [0, 1]),
-                      1e-6 + tf.cast(tf.reduce_sum(n_node), tf.float32))
-      loss_dict.update({cls_name + '/loss': tf.reduce_sum(losses)})
+
+      loss_dict.update({
+          cls_name + '/loss':
+              tf.multiply(
+                  self.options.loss_weight,
+                  self._compute_cross_entropy_loss(n_node, cls_logits,
+                                                   cls_labels))
+      })
     return loss_dict
 
   def build_metrics(self, inputs, predictions, **kwargs):
