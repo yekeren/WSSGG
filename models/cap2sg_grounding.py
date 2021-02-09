@@ -309,7 +309,8 @@ class Cap2SGGrounding(model_base.ModelBase):
         num_hidden_layers,
         num_attention_heads=self.options.contextualization_config.
         num_attention_heads,
-        intermediate_size=hidden_size)
+        intermediate_size=self.options.contextualization_config.
+        intermediate_size)
 
     # Extract linguistic information, e.g., nodes=`suitcase:small,packed`.
     n_node, n_edge, nodes, edges, senders, receivers = (
@@ -363,6 +364,8 @@ class Cap2SGGrounding(model_base.ModelBase):
             entity_labels[:, :, 1:],
         'grounding/entity/id':
             entity_ids,
+        'grounding/entity/attribute_id':
+            per_ent_atts_ids,
         'grounding/entity/proposal_id':
             index_entity_box,
         'grounding/entity/proposal_box':
