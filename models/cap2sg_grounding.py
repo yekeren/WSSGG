@@ -12,11 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-""" 
-Weakly supervised scene graph generation model inspired by:
-  - Zareian et al. 2020 (VSPNet)
-  - Ye et al. 2019 (Cap2det) (our previous work).
-"""
 
 from __future__ import absolute_import
 from __future__ import division
@@ -94,17 +89,17 @@ def ground_entities(options, dt):
                                                dt.embeddings, dt.bias_attribute)
 
   # Set the outputs.
-  dt.entity_proposal_id = tf.math.argmax(dt.attention,
-                                         axis=2,
-                                         output_type=tf.int32)
-  dt.entity_proposal_box = tf.gather_nd(
+  dt.grounding.entity_proposal_id = tf.math.argmax(dt.attention,
+                                                   axis=2,
+                                                   output_type=tf.int32)
+  dt.grounding.entity_proposal_box = tf.gather_nd(
       dt.proposals,
       indices=tf.stack([
           tf.broadcast_to(tf.expand_dims(tf.range(dt.batch), 1),
                           [dt.batch, dt.max_n_entity]),
-          dt.entity_proposal_id,
+          dt.grounding.entity_proposal_id,
       ], -1))
-  dt.entity_proposal_score = tf.reduce_max(dt.attention, 2)
+  dt.grounding.entity_proposal_score = tf.reduce_max(dt.attention, 2)
   return dt
 
 

@@ -22,16 +22,10 @@ from absl import logging
 import numpy as np
 import tensorflow as tf
 
-import tf_slim as slim
-
 from protos import model_pb2
-
 from modeling.utils import masked_ops
 from modeling.utils import box_ops
 from models.cap2sg_data import DataTuple
-
-from models import model_base
-from bert.modeling import transformer_model
 
 
 def detect_entities(options, dt):
@@ -42,9 +36,15 @@ def detect_entities(options, dt):
     dt: A DataTuple object.
 
   Returns:
-    dt.entity_proposal_id
-    dt.entity_proposal_box
-    dt.entity_proposal_score
+    dt.detection.valid_detections
+    dt.detection.nmsed_boxes
+    dt.detection.nmsed_scores
+    dt.detection.nmsed_classes
+    dt.detection.nmsed_attribute_scores
+    dt.detection.nmsed_attribute_classes
+    dt.refined_entity_proposal_id
+    dt.refined_entity_proposal_box
+    dt.refined_entity_proposal_score
   """
   if not isinstance(options, model_pb2.Cap2SGDetection):
     raise ValueError('Options has to be a Cap2SGDetection proto.')
@@ -54,12 +54,12 @@ def detect_entities(options, dt):
 
   # Compute detection labels.
   dt.detection_instance_labels = _scatter_entity_labels(
-      proposal_id=dt.entity_proposal_id,
+      proposal_id=dt.grounding.entity_proposal_id,
       entity_id=dt.entity_ids,
       max_n_proposal=dt.max_n_proposal,
       vocab_size=dt.vocab_size)
   dt.attribute_instance_labels = _scatter_attribute_labels(
-      proposal_id=dt.entity_proposal_id,
+      proposal_id=dt.grounding.entity_proposal_id,
       attribute_id=dt.per_ent_att_ids,
       max_n_proposal=dt.max_n_proposal,
       vocab_size=dt.vocab_size)
@@ -81,8 +81,9 @@ def detect_entities(options, dt):
 
   # Postprocess: non-maximum-suppression.
   post_process = options.post_process
-  (dt.nmsed_boxes, dt.nmsed_scores, dt.nmsed_classes,
-   dt.valid_detections) = tf.image.combined_non_max_suppression(
+  (dt.detection.nmsed_boxes, dt.detection.nmsed_scores,
+   dt.detection.nmsed_classes,
+   dt.detection.valid_detections) = tf.image.combined_non_max_suppression(
        tf.expand_dims(dt.proposals, 2),
        dt.detection_instance_scores[:, :, 1:],
        max_output_size_per_class=post_process.max_size_per_class,
@@ -93,30 +94,36 @@ def detect_entities(options, dt):
   # Get the proposal id of the detection box, then fetch the attributes.
   #   nmsed_proposal shape = [batch, max_total_size, max_n_proposal].
   #   nmsed_attribute shape [batch, max_total_size, vocab_size]
-  iou = _compute_iou(dt.valid_detections, dt.nmsed_boxes, dt.n_proposal,
-                     dt.proposals)
-  nmsed_proposal_id = tf.math.argmax(iou, axis=2, output_type=tf.int32)
+  iou = _compute_iou(dt.detection.valid_detections, dt.detection.nmsed_boxes,
+                     dt.n_proposal, dt.proposals)
+  dt.detection.nmsed_proposal_id = tf.math.argmax(iou,
+                                                  axis=2,
+                                                  output_type=tf.int32)
   nmsed_attribute = tf.gather_nd(dt.attribute_instance_scores,
-                                 indices=_get_full_indices(nmsed_proposal_id))
-  dt.nmsed_attribute_scores = tf.reduce_max(nmsed_attribute, -1)
-  dt.nmsed_attribute_classes = tf.argmax(nmsed_attribute,
-                                         axis=2,
-                                         output_type=tf.int32)
+                                 indices=_get_full_indices(
+                                     dt.detection.nmsed_proposal_id))
+  dt.detection.nmsed_attribute_scores = tf.reduce_max(nmsed_attribute, -1)
+  dt.detection.nmsed_attribute_classes = tf.argmax(nmsed_attribute,
+                                                   axis=2,
+                                                   output_type=tf.int32)
 
   # ID to token.
-  dt.nmsed_classes = dt.id2token_func(tf.cast(1 + dt.nmsed_classes, tf.int32))
-  dt.nmsed_attribute_classes = dt.id2token_func(dt.nmsed_attribute_classes)
+  dt.detection.nmsed_classes = dt.id2token_func(
+      tf.cast(1 + dt.detection.nmsed_classes, tf.int32))
+  dt.detection.nmsed_attribute_classes = dt.id2token_func(
+      dt.detection.nmsed_attribute_classes)
 
   # Override grounding results if it is specified.
   dummy_attention = tf.gather_nd(tf.transpose(dt.detection_instance_scores,
                                               [0, 2, 1]),
                                  indices=_get_full_indices(dt.entity_ids))
-  dt.refined_entity_proposal_id = tf.math.argmax(dummy_attention,
-                                                 axis=2,
-                                                 output_type=tf.int32)
-  dt.refined_entity_proposal_box = tf.gather_nd(
-      dt.proposals, indices=_get_full_indices(dt.refined_entity_proposal_id))
-  dt.refined_entity_proposal_score = tf.reduce_max(dummy_attention, 2)
+  dt.refined_grounding.entity_proposal_id = tf.math.argmax(dummy_attention,
+                                                           axis=2,
+                                                           output_type=tf.int32)
+  dt.refined_grounding.entity_proposal_box = tf.gather_nd(
+      dt.proposals,
+      indices=_get_full_indices(dt.refined_grounding.entity_proposal_id))
+  dt.refined_grounding.entity_proposal_score = tf.reduce_max(dummy_attention, 2)
   return dt
 
 
@@ -162,7 +169,6 @@ def _box_classify(detection_head, embeddings, bias, normalize_fn=tf.nn.softmax):
   max_n_proposal = tf.shape(detection_head)[1]
   detection_scores = tf.concat(
       [tf.zeros([batch, max_n_proposal, 1]), detection_scores[:, :, 1:]], -1)
-
   return detection_logits, detection_scores
 
 
