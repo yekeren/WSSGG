@@ -33,7 +33,7 @@ from models.cap2sg_data import DataTuple
 from bert.modeling import transformer_model
 
 
-def ground_entities(options, dt):
+def ground_entities(options, dt, is_training):
   """Grounds entities.
 
   Args:
@@ -56,33 +56,47 @@ def ground_entities(options, dt):
 
   # Compute the attention head.
   hidden_size = dt.dims
-  attention_input = tf.layers.Dense(hidden_size,
-                                    activation=None,
-                                    use_bias=True,
-                                    name='bert_input')(dt.proposal_features)
-  attention_head = transformer_model(
-      attention_input,
-      hidden_size=hidden_size,
-      num_hidden_layers=options.num_hidden_layers,
-      num_attention_heads=options.num_attention_heads,
-      intermediate_size=options.intermediate_size)
+  attention_head = tf.layers.Dense(hidden_size,
+                                   activation=tf.math.tanh,
+                                   use_bias=True,
+                                   name='bert_input')(dt.proposal_features)
+
+  if options.self_attention:
+    hidden_dropout_prob = options.hidden_dropout_prob if is_training else 0.0
+    attention_probs_dropout_prob = options.attention_probs_dropout_prob if is_training else 0.0
+    attention_head = transformer_model(
+        attention_head,
+        hidden_size=hidden_size,
+        num_hidden_layers=options.num_hidden_layers,
+        num_attention_heads=options.num_attention_heads,
+        intermediate_size=options.intermediate_size,
+        hidden_dropout_prob=hidden_dropout_prob,
+        attention_probs_dropout_prob=attention_probs_dropout_prob)
+
   attention_mask = tf.expand_dims(dt.proposal_masks, 1)
 
   # Compute the entity head and attribute head.
   entity_head, attribute_head = [
-      tf.layers.Dense(dt.dims,
-                      activation=tf.nn.leaky_relu,
-                      use_bias=True,
+      tf.layers.Dense(dt.dims, activation=None, use_bias=True,
                       name=name)(dt.proposal_features)
       for name in ['entity_head', 'attribute_head']
   ]
 
   # Image-level classification using an attention model.
+  if is_training:
+    random_mask = tf.greater(
+        tf.random.uniform(tf.shape(attention_mask), minval=0, maxval=1.0),
+        1.0 - options.midn_attention_dropout_keep_prob)
+    attention_mask = tf.multiply(attention_mask,
+                                 tf.cast(random_mask, tf.float32))
   dt.attention = _compute_attention(
       tf.add(
           dt.entity_embs,
           _compute_attribute_embeddings(dt.per_ent_n_att, dt.per_ent_att_embs)),
       attention_head, attention_mask)
+  # if is_training:
+  #   dt.attention = tf.nn.dropout(
+  #       dt.attention, keep_prob=options.midn_attention_dropout_keep_prob)
   dt.entity_image_logits = _apply_attention(dt.attention, entity_head,
                                             dt.embeddings, dt.bias_entity)
   dt.attribute_image_logits = _apply_attention(dt.attention, attribute_head,
@@ -92,13 +106,14 @@ def ground_entities(options, dt):
   dt.grounding.entity_proposal_id = tf.math.argmax(dt.attention,
                                                    axis=2,
                                                    output_type=tf.int32)
-  dt.grounding.entity_proposal_box = tf.gather_nd(
-      dt.proposals,
-      indices=tf.stack([
-          tf.broadcast_to(tf.expand_dims(tf.range(dt.batch), 1),
-                          [dt.batch, dt.max_n_entity]),
-          dt.grounding.entity_proposal_id,
-      ], -1))
+  indices = tf.stack([
+      tf.broadcast_to(tf.expand_dims(tf.range(dt.batch), 1),
+                      [dt.batch, dt.max_n_entity]),
+      dt.grounding.entity_proposal_id,
+  ], -1)
+  dt.grounding.entity_proposal_box = tf.gather_nd(dt.proposals, indices)
+  dt.grounding.entity_proposal_feature = tf.gather_nd(dt.proposal_features,
+                                                      indices)
   dt.grounding.entity_proposal_score = tf.reduce_max(dt.attention, 2)
   return dt
 

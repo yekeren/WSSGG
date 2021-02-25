@@ -24,16 +24,29 @@ from models.ws_scene_graph_caption_gnet import WSSceneGraphCaptionGNet
 from models.ws_scene_graph_rnn_refine import WSSceneGraphRnnRefine
 from models.ws_scene_graph_rnn_refine_v2 import WSSceneGraphRnnRefineV2
 from models.ws_sggen_ling import WSSGGenLing
-from models.cap2sg_grounding import Cap2SGGrounding
+from models.cap2sg import Cap2SG
+# from models.cap2sg_grounding import Cap2SGGrounding
+# from models.cap2sg_detection import Cap2SGDetection
+# from models.cap2sg_relation import Cap2SGRelation
 
 MODELS = {
-    model_pb2.Cap2SGGrounding.ext: Cap2SGGrounding,
-    model_pb2.WSSceneGraph.ext: WSSceneGraph,
-    model_pb2.WSSGGenLing.ext: WSSGGenLing,
-    model_pb2.WSSceneGraphGNet.ext: WSSceneGraphGNet,
-    model_pb2.WSSceneGraphRnnRefine.ext: WSSceneGraphRnnRefine,
-    model_pb2.WSSceneGraphRnnRefineV2.ext: WSSceneGraphRnnRefineV2,
-    model_pb2.WSSceneGraphCaptionGNet.ext: WSSceneGraphCaptionGNet,
+    model_pb2.Cap2SG.ext:
+        Cap2SG,
+    #     model_pb2.Cap2SGGrounding.ext: Cap2SGGrounding,
+    #     model_pb2.Cap2SGDetection.ext: Cap2SGDetection,
+    #     model_pb2.Cap2SGRelation.ext: Cap2SGRelation,
+    model_pb2.WSSceneGraph.ext:
+        WSSceneGraph,
+    model_pb2.WSSGGenLing.ext:
+        WSSGGenLing,
+    model_pb2.WSSceneGraphGNet.ext:
+        WSSceneGraphGNet,
+    model_pb2.WSSceneGraphRnnRefine.ext:
+        WSSceneGraphRnnRefine,
+    model_pb2.WSSceneGraphRnnRefineV2.ext:
+        WSSceneGraphRnnRefineV2,
+    model_pb2.WSSceneGraphCaptionGNet.ext:
+        WSSceneGraphCaptionGNet,
 }
 
 

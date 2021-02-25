@@ -66,12 +66,19 @@ def detect_entities(options, dt):
 
   # Predict detection scores.
   detection_head, attribute_head = [
-      tf.layers.Dense(dt.dims,
-                      activation=tf.nn.leaky_relu,
-                      use_bias=True,
+      tf.layers.Dense(dt.dims, activation=None, use_bias=True,
                       name=name)(dt.proposal_features)
       for name in ['entity_detection_head', 'attribute_detection_head']
   ]
+  if options.detection_feature_type == model_pb2.DET_FEATURE_DEFAULT:
+    dt.detection_features = detection_head
+  elif options.detection_feature_type == model_pb2.DET_FEATURE_ADD_ATTRIBUTE:
+    dt.detection_features = tf.concat([detection_head, attribute_head], -1)
+  elif options.detection_feature_type == model_pb2.DET_FEATURE_CNN:
+    dt.detection_features = dt.proposal_features
+  else:
+    raise ValueError('Invalid detection feature type.')
+
   (dt.detection_instance_logits,
    dt.detection_instance_scores) = _box_classify(detection_head, dt.embeddings,
                                                  dt.bias_entity)
@@ -90,6 +97,7 @@ def detect_entities(options, dt):
        max_total_size=post_process.max_total_size,
        iou_threshold=post_process.iou_thresh,
        score_threshold=post_process.score_thresh)
+  dt.detection.nmsed_classes = tf.cast(1 + dt.detection.nmsed_classes, tf.int32)
 
   # Get the proposal id of the detection box, then fetch the attributes.
   #   nmsed_proposal shape = [batch, max_total_size, max_n_proposal].
@@ -99,19 +107,13 @@ def detect_entities(options, dt):
   dt.detection.nmsed_proposal_id = tf.math.argmax(iou,
                                                   axis=2,
                                                   output_type=tf.int32)
-  nmsed_attribute = tf.gather_nd(dt.attribute_instance_scores,
-                                 indices=_get_full_indices(
-                                     dt.detection.nmsed_proposal_id))
+  indices = _get_full_indices(dt.detection.nmsed_proposal_id)
+  nmsed_attribute = tf.gather_nd(dt.attribute_instance_scores, indices)
   dt.detection.nmsed_attribute_scores = tf.reduce_max(nmsed_attribute, -1)
   dt.detection.nmsed_attribute_classes = tf.argmax(nmsed_attribute,
                                                    axis=2,
                                                    output_type=tf.int32)
-
-  # ID to token.
-  dt.detection.nmsed_classes = dt.id2token_func(
-      tf.cast(1 + dt.detection.nmsed_classes, tf.int32))
-  dt.detection.nmsed_attribute_classes = dt.id2token_func(
-      dt.detection.nmsed_attribute_classes)
+  dt.detection.nmsed_features = tf.gather_nd(dt.proposal_features, indices)
 
   # Override grounding results if it is specified.
   dummy_attention = tf.gather_nd(tf.transpose(dt.detection_instance_scores,
@@ -120,9 +122,10 @@ def detect_entities(options, dt):
   dt.refined_grounding.entity_proposal_id = tf.math.argmax(dummy_attention,
                                                            axis=2,
                                                            output_type=tf.int32)
-  dt.refined_grounding.entity_proposal_box = tf.gather_nd(
-      dt.proposals,
-      indices=_get_full_indices(dt.refined_grounding.entity_proposal_id))
+  indices = _get_full_indices(dt.refined_grounding.entity_proposal_id)
+  dt.refined_grounding.entity_proposal_box = tf.gather_nd(dt.proposals, indices)
+  dt.refined_grounding.entity_proposal_feature = tf.gather_nd(
+      dt.detection_features, indices)
   dt.refined_grounding.entity_proposal_score = tf.reduce_max(dummy_attention, 2)
   return dt
 

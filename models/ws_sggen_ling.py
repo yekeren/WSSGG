@@ -61,15 +61,15 @@ from object_detection.core import standard_fields
 from model_utils.scene_graph_evaluation import SceneGraphEvaluator
 
 
-class WSSceneGraphGNet(model_base.ModelBase):
-  """WSSceneGraphGNet model to provide instance-level annotations. """
+class WSSGGenLing(model_base.ModelBase):
+  """WSSGGenLing model to provide instance-level annotations. """
 
   def __init__(self, options, is_training):
-    """Constructs the WSSceneGraphGNet instance. """
-    super(WSSceneGraphGNet, self).__init__(options, is_training)
+    """Constructs the WSSGGenLing instance. """
+    super(WSSGGenLing, self).__init__(options, is_training)
 
-    if not isinstance(options, model_pb2.WSSceneGraphGNet):
-      raise ValueError('Options has to be an WSSceneGraphGNet proto.')
+    if not isinstance(options, model_pb2.WSSGGenLing):
+      raise ValueError('Options has to be an WSSGGenLing proto.')
 
     # Load token2id mapping, convert 1-based index to 0-based index.
     with tf.io.gfile.GFile(options.token_to_id_meta_file, 'r') as fid:
@@ -112,220 +112,59 @@ class WSSceneGraphGNet(model_base.ModelBase):
     self.arg_scope_fn = hyperparams.build_hyperparams(options.fc_hyperparams,
                                                       is_training)
 
-  def _relation_classification(self, n_proposal, proposals, proposal_features):
-    """Classifies relations given the proposal features.
-
-    Args:
-      n_proposal: A [batch] int tensor.
-      proposals: A [batch, max_n_proposal, 4] float tensor.
-      proposal_features: A [batch, max_n_proposal, feature_dims] float tensor.
-
-    Returns:
-      relation_logits: A [batch, max_n_proposal**2, 1 + n_predicate] float tensor.
-    """
-    dims = self.predicate_emb_weights.shape[-1]
-    predicate_emb_weights = np.concatenate(
-        [np.zeros((1, dims)), self.predicate_emb_weights], axis=0)
-    weights_initializer = tf.compat.v1.constant_initializer(
-        predicate_emb_weights.transpose())
-
-    # Predict the predicate given the subject/object.
-    # - logits_predicate_given_subject = [batch, max_n_proposal, 1 + n_predicate].
-    # - logits_predicate_given_object = [batch, max_n_proposal, 1 + n_predicate].
-    with slim.arg_scope(self.arg_scope_fn()):
-      logits_predicate_given_subject = slim.fully_connected(
-          proposal_features,
-          num_outputs=1 + self.n_predicate,
-          activation_fn=None,
-          weights_initializer=weights_initializer,
-          biases_initializer=None,
-          scope='relation/attach_to_subject')
-      logits_predicate_given_object = slim.fully_connected(
-          proposal_features,
-          num_outputs=1 + self.n_predicate,
-          activation_fn=None,
-          weights_initializer=weights_initializer,
-          biases_initializer=None,
-          scope='relation/attach_to_object')
-
-    relation_logits = tf.minimum(
-        tf.expand_dims(logits_predicate_given_subject, 2),
-        tf.expand_dims(logits_predicate_given_object, 1))
-
-    # Reshape.
-    batch = proposal_features.shape[0].value
-    max_n_proposal = tf.shape(proposal_features)[1]
-    relation_logits = tf.reshape(relation_logits, [
-        batch, max_n_proposal * max_n_proposal, relation_logits.shape[-1].value
-    ])
-    return relation_logits
-
-  def _multiple_entity_detection(self, n_proposal, proposal_features, n_triple,
-                                 subject_text_ids, subject_text_embs,
-                                 object_text_ids, object_text_embs):
-    """Detects multiple entities given the ground-truth.
-
-    We call it in the `build_losses` because `subject_text_embs`,
-    `object_text_embs` are from graph annotations.
-
-    Args:
-      n_proposal: A [batch] int tensor.
-      proposal_features: A [batch, max_n_proposal, feature_dims] float tensor.
-      n_triple: A [batch] int tensor.
-      subject_text_ids: A [batch, max_n_triple] int tensor.
-      subject_text_embs: A [batch, max_n_triple, feature_dims] float tensor.
-      object_text_ids: A [batch, max_n_triple] int tensor.
-      object_text_embs: A [batch, max_n_triple, feature_dims] float tensor.
-
-    Returns:
-      detection_score: Detection score, shape=[batch, max_n_proposal, n_entity]
-      logits_entity_given_subject: Subject prediction, shape=[batch, max_n_triple, n_entity].
-      logits_entity_given_object: Object prediction, shape=[batch, max_n_triple, n_entity].
-    """
-    max_n_proposal = tf.shape(proposal_features)[1]
-    proposal_masks = tf.sequence_mask(n_proposal,
-                                      maxlen=max_n_proposal,
-                                      dtype=tf.float32)
-
-    # MIDN network: detection branch.
-    # Compute attention using contextualized subject/object embeddings as keys.
-    # - attn_proposal_given_subject = [batch, max_n_proposal, max_n_triple].
-    # - attn_proposal_given_object = [batch, max_n_proposal, max_n_triple].
-
-    def logits_to_attention(logits):
-      attn = masked_ops.masked_softmax(logits,
-                                       mask=tf.expand_dims(proposal_masks, -1),
-                                       dim=1)
-      attn = slim.dropout(attn,
-                          self.options.attn_dropout_keep_prob,
-                          is_training=self.is_training)
-      return attn
-
-    logits_proposal_given_subject = tf.multiply(
-        self.options.attn_scale,
-        tf.matmul(proposal_features, subject_text_embs, transpose_b=True))
-    logits_proposal_given_object = tf.multiply(
-        self.options.attn_scale,
-        tf.matmul(proposal_features, object_text_embs, transpose_b=True))
-
-    attn_proposal_given_subject = logits_to_attention(
-        logits_proposal_given_subject)
-    attn_proposal_given_object = logits_to_attention(
-        logits_proposal_given_object)
-
-    # MIDN network: classification branch.
-    # - logits_entity_given_proposal = [batch, max_n_proposal, n_entity].
-    weights_initializer = tf.compat.v1.constant_initializer(
-        self.entity_emb_weights.transpose())
-    weights_initializer = None
-    with slim.arg_scope(self.arg_scope_fn()):
-      logits_entity_given_proposal = slim.fully_connected(
-          proposal_features,
-          num_outputs=self.n_entity,
-          activation_fn=None,
-          weights_initializer=weights_initializer,
-          biases_initializer=None,
-          scope='entity/cls_branch')
-
-    # Apply attention weighing.
-    # The two logits are then used for image-level classification..
-    # - logits_entity_given_subject = [batch, max_n_triple, n_entity].
-    # - logits_entity_given_object = [batch, max_n_triple, n_entity].
-    logits_entity_given_subject = tf.matmul(attn_proposal_given_subject,
-                                            logits_entity_given_proposal,
-                                            transpose_a=True)
-    logits_entity_given_object = tf.matmul(attn_proposal_given_object,
-                                           logits_entity_given_proposal,
-                                           transpose_a=True)
-    # Create detection score.
-    # This process use max-pooling to aggregate attention, to deal with multiple
-    # instances of the same class.
-    # - subject_text_onehot = [batch, max_n_triple, n_entity].
-    # - object_text_onehot = [batch, max_n_triple, n_entity].
-    subject_text_onehot = tf.one_hot(subject_text_ids,
-                                     depth=self.n_entity,
-                                     dtype=tf.float32)
-    object_text_onehot = tf.one_hot(object_text_ids,
-                                    depth=self.n_entity,
-                                    dtype=tf.float32)
-
-    def _scatter_attention(text_onehot, attn):
-      """Scatters attention."""
-      max_n_triple = tf.shape(text_onehot)[1]
-      mask = tf.sequence_mask(n_triple, maxlen=max_n_triple, dtype=tf.float32)
-      mask = tf.expand_dims(mask, 1)
-      mask = tf.expand_dims(mask, -1)
-
-      # text_onehot = [batch, max_n_triple, n_entity]
-      # attn = [batch, max_n_proposal, max_n_triple].
-      text_onehot = tf.expand_dims(text_onehot, 1)
-      attn = tf.expand_dims(attn, -1)
-
-      attn_scattered = masked_ops.masked_maximum(tf.multiply(attn, text_onehot),
-                                                 mask=mask,
-                                                 dim=2)
-      return tf.squeeze(attn_scattered, 2)
-
-    attn_proposal_given_subject_scattered = _scatter_attention(
-        subject_text_onehot, attn_proposal_given_subject)
-    attn_proposal_given_object_scattered = _scatter_attention(
-        object_text_onehot, attn_proposal_given_object)
-
-    detection_score = tf.multiply(
-        tf.maximum(attn_proposal_given_subject_scattered,
-                   attn_proposal_given_object_scattered),
-        tf.nn.softmax(logits_entity_given_proposal))
-
-    return detection_score, logits_entity_given_subject, logits_entity_given_object
-
-  def _refine_entity_scores_once(self, n_proposal, proposal_features, scope):
+  def _refine_entity_scores_once(self, n_proposal, proposals, proposal_features,
+                                 scope):
     """Refines scene graph entity score predictions.
 
     Args:
       n_proposal: A [batch] int tensor.
+      proposals: A [batch, max_n_proposal, 4] float tensor.
       proposal_features: A [batch, max_n_proposal, dims] float tensor.
       scope: Name of the variable scope.
 
     Returns:
       logits_entity_given_proposal: A [batch, max_n_proposal, 1 + n_entity] tensor.
     """
-    # Add ZEROs to the first row for the OOV embedding.
-    dims = self.entity_emb_weights.shape[-1]
-    entity_emb_weights = np.concatenate(
-        [np.zeros((1, dims)), self.entity_emb_weights], axis=0)
-
-    weights_initializer = tf.compat.v1.constant_initializer(
-        entity_emb_weights.transpose())
     with slim.arg_scope(self.arg_scope_fn()):
-      logits_entity_given_proposal = slim.fully_connected(
-          proposal_features,
-          num_outputs=1 + self.n_entity,
-          activation_fn=None,
-          weights_initializer=weights_initializer,
-          biases_initializer=None,
-          scope=scope)
+      logits_entity_given_proposal = slim.fully_connected(proposal_features,
+                                                          num_outputs=1 +
+                                                          self.n_entity,
+                                                          activation_fn=None,
+                                                          scope=scope)
     return logits_entity_given_proposal
 
-  def _refine_entity_scores(self, n_proposal, proposals, proposal_features,
-                            n_refine_iteration):
-    """Refines scene graph entity scores.
+  def _refine_relation_scores_once(self, n_proposal, proposals,
+                                   proposal_features, scope):
+    """Classifies relations given the proposal features.
 
     Args:
       n_proposal: A [batch] int tensor.
       proposals: A [batch, max_n_proposal, 4] float tensor.
-      proposal_features: A [batch, max_n_proposal, dims] float tensor.
-      n_refine_iteration: Refine iterations.
+      proposal_features: A [batch, max_n_proposal, feature_dims] float tensor.
+      scope: Name of the variable scope.
 
     Returns:
-      entity_scores_list: A list of [batch, max_n_proposal, 1 + n_entity] 
-        float tensors.
+      relation_logits: A [batch, max_n_proposal**2, 1 + n_predicate] float tensor.
     """
-    return [
-        self._refine_entity_scores_once(n_proposal,
-                                        proposal_features,
-                                        scope='refine/iter_%i/entity' % i)
-        for i in range(1, 1 + n_refine_iteration)
-    ]
+    with slim.arg_scope(self.arg_scope_fn()):
+      with tf.variable_scope(scope):
+        logits_predicate_given_subject = slim.fully_connected(
+            proposal_features,
+            num_outputs=1 + self.n_predicate,
+            activation_fn=None,
+            scope='attach_to_subject')
+        logits_predicate_given_object = slim.fully_connected(
+            proposal_features,
+            num_outputs=1 + self.n_predicate,
+            activation_fn=None,
+            scope='attach_to_object')
+
+    relation_logits = tf.minimum(
+        tf.expand_dims(logits_predicate_given_subject, 2),
+        tf.expand_dims(logits_predicate_given_object, 1))
+
+    return tf.reshape(relation_logits,
+                      [relation_logits.shape[0], -1, relation_logits.shape[-1]])
 
   def predict(self, inputs, **kwargs):
     """Predicts the resulting tensors.
@@ -348,69 +187,57 @@ class WSSceneGraphGNet(model_base.ModelBase):
     """
     predictions = {}
 
-    # Ground-truth boxes can only be used for evaluation/visualization:
-    # - Pop `scene_graph/subject/box`
-    # - Pop `scene_graph/object/box`
-    if self.is_training:
-      inputs.pop('scene_graph/subject/box')
-      inputs.pop('scene_graph/object/box')
+    # Checking the refinement score normalizer.
+    score_normalizer = (tf.nn.softmax
+                        if self.options.refine_use_softmax else tf.nn.sigmoid)
 
     # Extract proposal features.
-    # - proposal_masks = [batch, max_n_proposal].
     # - proposals = [batch, max_n_proposal, 4].
+    # - proposal_features = [batch, max_n_proposal, dims].
     n_proposal = inputs['image/n_proposal']
     proposals = inputs['image/proposal']
     proposal_features = inputs['image/proposal/feature']
 
     batch = proposals.shape[0].value
     max_n_proposal = tf.shape(proposal_features)[1]
-    proposal_masks = tf.sequence_mask(n_proposal,
-                                      maxlen=max_n_proposal,
-                                      dtype=tf.float32)
 
-    # Checking the refinement score normalizer.
-    score_normalizer = (tf.nn.softmax
-                        if self.options.refine_use_softmax else tf.nn.sigmoid)
-
-    # One additional hidden layers.
     with slim.arg_scope(self.arg_scope_fn()):
-      shared_hiddens = slim.fully_connected(
+      predictions['features/shared_hidden'] = slim.fully_connected(
           proposal_features,
-          num_outputs=self.options.entity_hidden_units,
-          activation_fn=tf.nn.leaky_relu,
-          scope="shared_hidden")
-    shared_hiddens = slim.dropout(shared_hiddens,
-                                  self.options.dropout_keep_prob,
-                                  is_training=self.is_training)
-    predictions.update({'features/shared_hidden': shared_hiddens})
+          num_outputs=300,
+          activation_fn=None,
+          scope='shared')
+      predictions['image/proposal/feature'] = predictions[
+          'features/shared_hidden']
 
-    # Entity Score Refinement (ESR).
-    # - `proposal_scores/probas`=[batch, max_n_proposal, 1 + n_entity].
-    entity_scores_list = self._refine_entity_scores(
-        n_proposal, proposals, shared_hiddens, self.options.n_refine_iteration)
+    for i in range(1, 1 + self.options.n_refine_iteration):
+      # Entity Score Refinement (ESR).
+      # - `entity_score`=[batch, max_n_proposal, 1 + n_entity].
+      entity_scope = 'refine_%i/entity' % i
+      entity_score = self._refine_entity_scores_once(n_proposal, proposals,
+                                                     proposal_features,
+                                                     entity_scope)
 
-    for i, entity_scores in enumerate(entity_scores_list):
+      # Relation Score Refinement (RSR).
+      # - `relation_score`=[batch, max_n_proposal**2, 1 + n_predicate].
+      relation_scope = 'refine_%i/relation' % i
+      relation_score = self._refine_relation_scores_once(
+          n_proposal, proposals, proposal_features, relation_scope)
+
+      # Update results.
       predictions.update({
-          'refinement/iter_%i/proposal_logits' % (1 + i):
-              entity_scores,
-          'refinement/iter_%i/proposal_probas' % (1 + i):
-              score_normalizer(entity_scores),
+          'refine@%i/entity_logits' % i: entity_score,
+          'refine@%i/entity_probas' % i: score_normalizer(entity_score),
+          'refine@%i/relation_logits' % i: relation_score,
+          'refine@%i/relation_probas' % i: score_normalizer(relation_score),
       })
-
-    # Relation Classification (RC).
-    # - `relation_logits`=[batch, max_n_proposal * max_n_proposal, n_predicate].
-    relation_logits = self._relation_classification(n_proposal, proposals,
-                                                    shared_hiddens)
-    predictions.update({
-        'refinement/relation_logits': relation_logits,
-        'refinement/relation_probas': score_normalizer(relation_logits),
-    })
 
     # Post-process the predictions.
     if not self.is_training:
-      graph_proposal_scores = predictions['refinement/iter_%i/proposal_probas' %
+      graph_proposal_scores = predictions['refine@%i/entity_probas' %
                                           self.options.n_refine_iteration]
-      graph_relation_scores = predictions['refinement/relation_probas']
+      graph_relation_scores = predictions['refine@%i/relation_probas' %
+                                          self.options.n_refine_iteration]
       graph_proposal_scores = graph_proposal_scores[:, :, 1:]
       graph_relation_scores = graph_relation_scores[:, :, 1:]
 
@@ -430,7 +257,6 @@ class WSSceneGraphGNet(model_base.ModelBase):
           use_log_prob=self.options.use_log_prob)
 
       # Predict the pseudo boxes for visualization purpose.
-
       predictions.update({
           'object_detection/num_detections':
               triple_proposal.num_detections,
@@ -465,6 +291,152 @@ class WSSceneGraphGNet(model_base.ModelBase):
       })
 
     return predictions
+
+  def get_pseudo_triplets_from_inputs(self, inputs):
+    """Extracts text triplets from inputs dict.
+
+    WSSGGenLing model shall use `scene_pseudo_graph`.
+
+    Args:
+      inputs: A dictionary of input tensors keyed by names.
+
+    Returns:
+      n_triple: A [batch] tensor denoting the triples in each image.
+      subject_ids: A [batch, max_n_triple] int tensor.
+      predicate_ids: A [batch, max_n_triple] int tensor.
+      object_ids: A [batch, max_n_triple] int tensor.
+    """
+    n_node = inputs['scene_pseudo_graph/n_node']
+    n_edge = inputs['scene_pseudo_graph/n_edge']
+    nodes = inputs['scene_pseudo_graph/nodes']
+    edges = inputs['scene_pseudo_graph/edges']
+    senders = inputs['scene_pseudo_graph/senders']
+    receivers = inputs['scene_pseudo_graph/receivers']
+
+    batch = n_edge.shape[0].value
+    max_n_edge = tf.shape(edges)[1]
+
+    # Sender/Receiver indices.
+    batch_indices = tf.broadcast_to(tf.expand_dims(tf.range(batch), 1),
+                                    [batch, max_n_edge])
+    sender_indices = tf.stack([batch_indices, senders], -1)
+    receiver_indices = tf.stack([batch_indices, receivers], -1)
+
+    edge_mask = tf.sequence_mask(n_edge, maxlen=max_n_edge)
+
+    subject_label = tf.gather_nd(nodes, sender_indices)
+    subject_label = tf.where(edge_mask, subject_label,
+                             tf.zeros_like(subject_label, dtype=tf.string))
+    object_label = tf.gather_nd(nodes, receiver_indices)
+    object_label = tf.where(edge_mask, object_label,
+                            tf.zeros_like(object_label, dtype=tf.string))
+
+    # Returns image-level labels.
+    assert_cond = tf.reduce_all([
+        tf.reduce_all(tf.equal(n_edge, inputs['scene_graph/n_triple'])),
+        tf.reduce_all(tf.equal(subject_label, inputs['scene_graph/subject'])),
+        tf.reduce_all(tf.equal(edges, inputs['scene_graph/predicate'])),
+        tf.reduce_all(tf.equal(object_label, inputs['scene_graph/object']))
+    ])
+    assert_op = tf.Assert(assert_cond,
+                          ['Pseudo graph should be identical to triplets.'])
+    with tf.control_dependencies([assert_op]):
+      subject_ids = self.entity2id(subject_label)
+      object_ids = self.entity2id(object_label)
+      predicate_ids = self.predicate2id(edges)
+    return n_edge, subject_ids, predicate_ids, object_ids
+
+  def _multiple_entity_detection(self, n_proposal, proposals, proposal_features,
+                                 n_node, node_ids, node_embs):
+    """Detects multiple entities given the ground-truth.
+
+    The function is called in the `build_losses` because `node_ids`,
+    `node_embs` are from graph annotations.
+
+    Args:
+      n_proposal: A [batch] int tensor.
+      proposals: A [batch, max_n_proposal, 4] float tensor.
+      proposal_features: A [batch, max_n_proposal, dims] float tensor.
+      n_node: A [batch] int tensor.
+      node_ids: A [batch, max_n_node] int tensor.
+      node_embs: A [batch, max_n_node, feature_dims] float tensor.
+
+    Returns:
+      detection_score: Initial detection score, shape=[batch, max_n_proposal, n_entity]
+      med_loss: The loss term to be optimized, to get the initial detection score.
+    """
+    max_n_proposal = tf.shape(proposal_features)[1]
+    proposal_masks = tf.sequence_mask(n_proposal,
+                                      maxlen=max_n_proposal,
+                                      dtype=tf.float32)
+    max_n_node = tf.shape(node_ids)[1]
+    node_masks = tf.sequence_mask(n_node, maxlen=max_n_node, dtype=tf.float32)
+
+    with slim.arg_scope(self.arg_scope_fn()):
+      proposal_features_projected = slim.fully_connected(
+          proposal_features,
+          num_outputs=node_embs.shape[-1].value,
+          activation_fn=None,
+          scope='MED/detection')
+
+    # MED network: detection branch.
+    # - attn_proposal_given_node = [batch, max_n_proposal, max_n_node].
+    logits_proposal_given_node = tf.multiply(
+        self.options.attn_scale,
+        tf.matmul(proposal_features_projected, node_embs, transpose_b=True))
+
+    attn_proposal_given_node = masked_ops.masked_softmax(
+        logits_proposal_given_node,
+        mask=tf.expand_dims(proposal_masks, -1),
+        dim=1)
+    attn_proposal_given_node = slim.dropout(attn_proposal_given_node,
+                                            self.options.attn_dropout_keep_prob,
+                                            is_training=self.is_training)
+
+    # MED network: classification branch.
+    # - logits_entity_given_proposal = [batch, max_n_proposal, n_entity].
+    with slim.arg_scope(self.arg_scope_fn()):
+      logits_entity_given_proposal = slim.fully_connected(
+          proposal_features,
+          num_outputs=self.n_entity,
+          activation_fn=None,
+          scope='MED/classification')
+
+    # Apply attention weighing to get image-level classification for each node.
+    # - logits_entity_given_node = [batch, max_n_node, n_entity].
+    logits_entity_given_node = tf.matmul(attn_proposal_given_node,
+                                         logits_entity_given_proposal,
+                                         transpose_a=True)
+
+    # Compute the MED loss.
+    #   losses = [batch, max_n_node].
+    losses = tf.nn.sparse_softmax_cross_entropy_with_logits(
+        labels=node_ids, logits=logits_entity_given_node)
+    losses = masked_ops.masked_avg(losses, node_masks, dim=1)
+    loss = tf.reduce_mean(losses)
+
+    # Max-pooling.
+    # This process use max-pooling to aggregate attention, to deal with multiple
+    # instances of the same class. E.g., two person nodes in the graph.
+    #   node_id_onehot / attn = [batch, max_n_proposal, max_n_node, n_entity]
+    #   attn_maxpool = [batch, max_n_propoal, n_entity]
+    attn_maxpool = tf.expand_dims(attn_proposal_given_node, -1)
+    node_id_onehot = tf.one_hot(node_ids, depth=self.n_entity, dtype=tf.float32)
+    node_id_onehot = tf.expand_dims(node_id_onehot, 1)
+    attn_maxpool = tf.multiply(node_id_onehot, attn_maxpool)
+
+    node_masks = tf.expand_dims(node_masks, 1)
+    node_masks = tf.expand_dims(node_masks, -1)
+    attn_maxpool = masked_ops.masked_maximum(attn_maxpool,
+                                             mask=node_masks,
+                                             dim=2)
+    attn_maxpool = tf.squeeze(attn_maxpool, 2)
+
+    # Detection score.
+    detection_score = tf.multiply(attn_maxpool,
+                                  tf.nn.softmax(logits_entity_given_proposal))
+
+    return detection_score, loss
 
   def _compute_multiple_entity_detection_losses(self, n_triple, subject_labels,
                                                 subject_logits, object_labels,
@@ -741,58 +713,6 @@ class WSSceneGraphGNet(model_base.ModelBase):
                                         max_norm=max_norm)
     return embeddings
 
-  def get_pseudo_triplets_from_inputs(self, inputs):
-    """Extracts text triplets from inputs dict.
-
-    WSSceneGraphGNet model shall use `scene_pseudo_graph`.
-
-    Args:
-      inputs: A dictionary of input tensors keyed by names.
-
-    Returns:
-      n_triple: A [batch] tensor denoting the triples in each image.
-      subject_ids: A [batch, max_n_triple] int tensor.
-      predicate_ids: A [batch, max_n_triple] int tensor.
-      object_ids: A [batch, max_n_triple] int tensor.
-    """
-    n_node = inputs['scene_pseudo_graph/n_node']
-    n_edge = inputs['scene_pseudo_graph/n_edge']
-    nodes = inputs['scene_pseudo_graph/nodes']
-    edges = inputs['scene_pseudo_graph/edges']
-    senders = inputs['scene_pseudo_graph/senders']
-    receivers = inputs['scene_pseudo_graph/receivers']
-
-    batch = n_edge.shape[0].value
-    max_n_edge = tf.shape(edges)[1]
-
-    batch_indices = tf.broadcast_to(tf.expand_dims(tf.range(batch), 1),
-                                    [batch, max_n_edge])
-    sender_indices = tf.stack([batch_indices, senders], -1)
-    receiver_indices = tf.stack([batch_indices, receivers], -1)
-
-    edge_mask = tf.sequence_mask(n_edge, maxlen=max_n_edge)
-
-    subject_label = tf.gather_nd(nodes, sender_indices)
-    subject_label = tf.where(edge_mask, subject_label,
-                             tf.zeros_like(subject_label, dtype=tf.string))
-    object_label = tf.gather_nd(nodes, receiver_indices)
-    object_label = tf.where(edge_mask, object_label,
-                            tf.zeros_like(object_label, dtype=tf.string))
-
-    assert_cond = tf.reduce_all([
-        tf.reduce_all(tf.equal(n_edge, inputs['scene_graph/n_triple'])),
-        tf.reduce_all(tf.equal(subject_label, inputs['scene_graph/subject'])),
-        tf.reduce_all(tf.equal(object_label, inputs['scene_graph/object'])),
-        tf.reduce_all(tf.equal(edges, inputs['scene_graph/predicate']))
-    ])
-    assert_op = tf.Assert(assert_cond,
-                          ['Pseudo graph should be identical to triplets.'])
-    with tf.control_dependencies([assert_op]):
-      subject_ids = self.entity2id(subject_label)
-      object_ids = self.entity2id(object_label)
-      predicate_ids = self.predicate2id(edges)
-    return n_edge, subject_ids, predicate_ids, object_ids
-
   def build_losses(self, inputs, predictions, **kwargs):
     """Computes loss tensors.
 
@@ -808,6 +728,10 @@ class WSSceneGraphGNet(model_base.ModelBase):
     # Parse proposals.
     n_proposal = inputs['image/n_proposal']
     proposals = inputs['image/proposal']
+    proposal_features = inputs['image/proposal/feature']
+
+    batch = n_proposal.shape[0]
+    max_n_proposal = tf.shape(proposals)[1]
 
     # Parse pseudo graph annotations.
     n_node = inputs['scene_pseudo_graph/n_node']
@@ -817,82 +741,54 @@ class WSSceneGraphGNet(model_base.ModelBase):
     senders = inputs['scene_pseudo_graph/senders']
     receivers = inputs['scene_pseudo_graph/receivers']
 
-    batch = n_proposal.shape[0]
-    max_n_proposal = tf.shape(proposals)[1]
     max_n_edge = tf.shape(edges)[1]
 
     (n_triple, subject_ids, predicate_ids,
      object_ids) = self.get_pseudo_triplets_from_inputs(inputs)
 
-    batch_indices = tf.broadcast_to(tf.expand_dims(tf.range(batch), 1),
-                                    [batch, max_n_edge])
-    sender_indices = tf.stack([batch_indices, senders], -1)
-    receiver_indices = tf.stack([batch_indices, receivers], -1)
-
-    # Compute the initial node/edge embeddings.
-    # - node_embs = [batch, max_n_node, dims].
-    # - edge_embs = [batch, max_n_edge, dims].
+    # Using graph network to update node and edge embeddings.
     max_norm = None
     if self.options.HasField('graph_initial_embedding_max_norm'):
       max_norm = self.options.graph_initial_embedding_max_norm
+    regularizer = hyperparams._build_slim_regularizer(
+        self.options.fc_hyperparams.regularizer)
 
-    node_embs = self._compute_initial_embeddings(
-        self.entity2id(nodes),
-        initializer=self.entity_emb_weights,
-        scope='tgnet/node/embeddings',
-        max_norm=max_norm,
-        trainable=self.options.train_graph_initial_embedding)
-    edge_embs = self._compute_initial_embeddings(
-        self.predicate2id(edges),
-        initializer=self.predicate_emb_weights,
-        scope='tgnet/edge/embeddings',
-        max_norm=max_norm,
-        trainable=self.options.train_graph_initial_embedding)
-
-    # Using graph network to update node and edge embeddings.
     graph_network = graph_networks.build_graph_network(
         self.options.text_graph_network, is_training=self.is_training)
     with slim.arg_scope(self.arg_scope_fn()):
-      updated_node_embs, updated_edge_embs = graph_network.compute_graph_embeddings(
+      node_embs, edge_embs = graph_network.compute_graph_embeddings(
           n_node,
           n_edge,
-          node_embs,
-          edge_embs,
+          self._compute_initial_embeddings(
+              self.entity2id(nodes),
+              initializer=self.entity_emb_weights,
+              scope='linguistic/node/embeddings',
+              max_norm=max_norm,
+              trainable=self.options.train_graph_initial_embedding),
+          self._compute_initial_embeddings(
+              self.predicate2id(edges),
+              initializer=self.predicate_emb_weights,
+              scope='linguistic/edge/embeddings',
+              max_norm=max_norm,
+              trainable=self.options.train_graph_initial_embedding),
           senders,
           receivers,
-          regularizer=hyperparams._build_slim_regularizer(
-              self.options.fc_hyperparams.regularizer),
-      )
-    subject_text_embs = tf.gather_nd(updated_node_embs, sender_indices)
-    object_text_embs = tf.gather_nd(updated_node_embs, receiver_indices)
+          regularizer=regularizer)
 
     # Multiple Entity Detection (MED).
     # - `initial_detection_scores`=[batch, max_n_proposal, n_entity].
-    # - `logits_entity_given_subject`=[batch, max_n_triple, n_entity].
-    # - `logits_entity_given_object`=[batch, max_n_triple, n_entity].
-    (initial_detection_scores, logits_entity_given_subject,
-     logits_entity_given_object) = self._multiple_entity_detection(
-         n_proposal,
-         proposal_features=predictions['features/shared_hidden'],
-         n_triple=n_triple,
-         subject_text_ids=subject_ids,
-         subject_text_embs=subject_text_embs,
-         object_text_ids=object_ids,
-         object_text_embs=object_text_embs)
+    # - `logits_entity_given_entity`=[batch, max_n_node, n_entity].
+    (initial_detection_scores,
+     med_loss) = self._multiple_entity_detection(n_proposal,
+                                                 proposals,
+                                                 proposal_features,
+                                                 n_node=n_triple,
+                                                 node_ids=self.entity2id(nodes),
+                                                 node_embs=node_embs)
     predictions.update({
-        'pseudo/logits_entity_given_subject': logits_entity_given_subject,
-        'pseudo/logits_entity_given_object': logits_entity_given_object,
-        'refinement/iter_0/proposal_probas': initial_detection_scores,
+        'refine@0/entity_probas': initial_detection_scores,
     })
-
-    # Multiple Entity Detection losses.
-    loss_dict.update(
-        self._compute_multiple_entity_detection_losses(
-            n_triple=n_triple,
-            subject_labels=subject_ids,
-            subject_logits=logits_entity_given_subject,
-            object_labels=object_ids,
-            object_logits=logits_entity_given_object))
+    loss_dict.update({'losses/med_loss': med_loss})
 
     # Entity Refinement loss.
     # - `proposal_scores_0`=[batch, max_n_proposal, n_entity].
@@ -903,11 +799,12 @@ class WSSceneGraphGNet(model_base.ModelBase):
 
     max_n_triple = tf.shape(subject_ids)[1]
     proposal_scores_0 = initial_detection_scores
-    relation_scores_0 = predictions['refinement/relation_probas'][:, :, 1:]
+    relation_scores_0 = tf.zeros_like(
+        predictions['refine@1/relation_probas'])[:, :, 1:]
 
     proposal_to_proposal_weight = self.options.joint_inferring_relation_weight
-
     for i in range(1, 1 + self.options.n_refine_iteration):
+      # DP solution for the optimal subject/object boxe.
       mps = GraphMPS(
           n_triple=n_triple,
           n_proposal=n_proposal,
@@ -927,6 +824,7 @@ class WSSceneGraphGNet(model_base.ModelBase):
           'pseudo/object/box': mps.get_object_box(proposals),
       })
 
+      # Entity detection loss.
       pseudo_instance_labels = self._compute_pseudo_instance_labels(
           n_entity=self.n_entity,
           n_proposal=n_proposal,
@@ -939,41 +837,33 @@ class WSSceneGraphGNet(model_base.ModelBase):
       sgr_proposal_loss = self._compute_proposal_refinement_losses(
           n_proposal=n_proposal,
           labels=pseudo_instance_labels,
-          logits=predictions['refinement/iter_%i/proposal_logits' % i])
+          logits=predictions['refine@%i/entity_logits' % i])
 
-      enable_loss = tf.cast(
-          tf.train.get_or_create_global_step() >=
-          (i + 1) * self.options.sage_steps, tf.float32)
-      loss_weight = enable_loss * self.options.proposal_refine_loss_weight
+      # Relation detection los.
+      pseudo_relation_labels = self._compute_pseudo_relation_labels(
+          n_predicate=self.n_predicate,
+          n_proposal=n_proposal,
+          proposals=proposals,
+          predicate_index=predicate_ids,
+          subject_proposal_index=mps.subject_proposal_index,
+          object_proposal_index=mps.object_proposal_index,
+          iou_threshold_to_propogate=self.options.
+          iou_threshold_to_propogate_relation)
+      sgr_relation_loss = self._compute_relation_refinement_losses(
+          n_proposal=n_proposal,
+          max_n_proposal=max_n_proposal,
+          labels=pseudo_relation_labels,
+          logits=predictions['refine@%i/relation_logits' % i])
+
       loss_dict.update({
-          'losses/sgr_proposal_loss_%i' % i: loss_weight * sgr_proposal_loss,
+          'losses/sgr_proposal_loss_%i' % i: sgr_proposal_loss,
+          'losses/sgr_relation_loss_%i' % i: sgr_relation_loss
       })
-      proposal_scores_0 = predictions['refinement/iter_%i/proposal_probas' % i]
+
+      proposal_scores_0 = predictions['refine@%i/entity_probas' % i]
       proposal_scores_0 = proposal_scores_0[:, :, 1:]
-
-    # Relation refinement loss, relations are build on refined proposals.
-    pseudo_relation_labels = self._compute_pseudo_relation_labels(
-        n_predicate=self.n_predicate,
-        n_proposal=n_proposal,
-        proposals=proposals,
-        predicate_index=predicate_ids,
-        subject_proposal_index=mps.subject_proposal_index,
-        object_proposal_index=mps.object_proposal_index,
-        iou_threshold_to_propogate=self.options.
-        iou_threshold_to_propogate_relation)
-    sgr_relation_loss = self._compute_relation_refinement_losses(
-        n_proposal=n_proposal,
-        max_n_proposal=max_n_proposal,
-        labels=pseudo_relation_labels,
-        logits=predictions['refinement/relation_logits'])
-
-    enable_loss = tf.cast(
-        tf.train.get_or_create_global_step() >=
-        (self.options.n_refine_iteration + 1) * self.options.sage_steps,
-        tf.float32)
-    loss_weight = enable_loss * self.options.relation_refine_loss_weight
-    loss_dict.update(
-        {'losses/sgr_relation_loss_%i' % i: loss_weight * sgr_relation_loss})
+      relation_scores_0 = predictions['refine@%i/relation_probas' % i]
+      relation_scores_0 = relation_scores_0[:, :, 1:]
 
     return loss_dict
 
@@ -1010,19 +900,6 @@ class WSSceneGraphGNet(model_base.ModelBase):
 
     gt_subject_box = inputs['scene_graph/subject/box']
     gt_object_box = inputs['scene_graph/object/box']
-
-    # Compute the entity classification accuracy.
-    subject_logits = predictions['pseudo/logits_entity_given_subject']
-    object_logits = predictions['pseudo/logits_entity_given_object']
-
-    for name, labels, logits in [
-        ('metrics/predict_subject', subject_ids, subject_logits),
-        ('metrics/predict_object', object_ids, object_logits),
-    ]:
-      bingo = tf.equal(tf.cast(tf.argmax(logits, -1), tf.int32), labels)
-      accuracy_metric = tf.keras.metrics.Mean()
-      accuracy_metric.update_state(bingo)
-      metric_dict[name] = accuracy_metric
 
     # Compute the object detection metrics.
     eval_dict = {

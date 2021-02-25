@@ -44,10 +44,15 @@ def initialize(options, dt):
 
   # Create word embeddings.
   dt.dims = options.embedding_dims
-  dt.embeddings = tf.get_variable('embeddings',
-                                  initializer=_initialize_from_glove(
-                                      glove_dict, token2id, dt.dims),
-                                  trainable=options.embedding_trainable)
+  if options.embedding_trainable:
+    dt.embeddings = tf.get_variable('embeddings',
+                                    initializer=_initialize_from_glove(
+                                        glove_dict, token2id, dt.dims),
+                                    trainable=options.embedding_trainable)
+  else:
+    dt.embeddings = tf.constant(_initialize_from_glove(glove_dict, token2id,
+                                                       dt.dims),
+                                name='embeddings')
   dt.embedding_func = lambda x: tf.nn.embedding_lookup(dt.embeddings, x)
 
   # Create class biases.
@@ -88,7 +93,12 @@ def _read_vocabulary(vocabulary_file, glove_dict, min_freq):
   id_offset = 1  # ZERO is reserved for OOV.
   with open(vocabulary_file, 'r') as f:
     for line in f:
-      token, freq = line.strip('\n').split('\t')
+      elems = line.strip('\n').split('\t')
+      if len(elems) == 1:
+        token, freq = elems[0], 1000
+      elif len(elems) == 2:
+        token, freq = elems
+
       if int(freq) < min_freq:
         break
       if any(word in glove_dict for word in token.split(' ')):

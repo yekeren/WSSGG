@@ -97,38 +97,58 @@ class Cap2SG(model_base.ModelBase):
             dt.refined_grounding.entity_proposal_box,
         'detection/entity/proposal_score':
             dt.refined_grounding.entity_proposal_score,
-        'detection/num_detections':
+        'detection/prediction/num_detections':
             dt.detection.valid_detections,
-        'detection/detection_boxes':
+        'detection/prediction/detection_boxes':
             dt.detection.nmsed_boxes,
-        'detection/detection_scores':
+        'detection/prediction/detection_scores':
             dt.detection.nmsed_scores,
-        'detection/detection_classes':
+        'detection/prediction/detection_classes':
             dt.detection.nmsed_classes,
-        'detection/detection_attribute_scores':
+        'detection/prediction/detection_attribute_scores':
             dt.detection.nmsed_attribute_scores,
-        'detection/detection_attribute_classes':
-            dt.detection.nmsed_attribute_classes,
-        'relation/num_relations':
+        'detection/prediction/detection_attribute_classes':
+            dt.id2token_func(dt.detection.nmsed_attribute_classes),
+        'relation/prediction/num_relations':
             dt.relation.num_relations,
-        'relation/log_prob':
+        'relation/prediction/log_prob':
             dt.relation.log_prob,
-        'relation/relation_score':
+        'relation/prediction/relation_score':
             dt.relation.relation_score,
-        'relation/relation_class':
-            dt.relation.relation_class,
-        'relation/subject_proposal':
-            dt.relation.subject_proposal,
-        'relation/subject_score':
+        'relation/prediction/relation_class':
+            dt.id2token_func(dt.relation.relation_class),
+        'relation/prediction/subject_box':
+            dt.relation.subject_box,
+        'relation/prediction/subject_score':
             dt.relation.subject_score,
-        'relation/subject_class':
-            dt.relation.subject_class,
-        'relation/object_proposal':
-            dt.relation.object_proposal,
-        'relation/object_score':
+        'relation/prediction/subject_class':
+            dt.id2token_func(dt.relation.subject_class),
+        'relation/prediction/object_box':
+            dt.relation.object_box,
+        'relation/prediction/object_score':
             dt.relation.object_score,
-        'relation/object_class':
-            dt.relation.object_class,
+        'relation/prediction/object_class':
+            dt.id2token_func(dt.relation.object_class),
+        'common_sense/prediction/num_relations':
+            dt.relation.num_relations,
+        'common_sense/prediction/log_prob':
+            dt.relation.log_prob,
+        'common_sense/prediction/relation_score':
+            dt.relation.relation_score,
+        'common_sense/prediction/relation_class':
+            dt.id2token_func(dt.relation.relation_class),
+        'common_sense/prediction/subject_box':
+            dt.relation.subject_box,
+        'common_sense/prediction/subject_score':
+            dt.relation.subject_score,
+        'common_sense/prediction/subject_class':
+            dt.id2token_func(dt.relation.subject_class),
+        'common_sense/prediction/object_box':
+            dt.relation.object_box,
+        'common_sense/prediction/object_score':
+            dt.relation.object_score,
+        'common_sense/prediction/object_class':
+            dt.id2token_func(dt.relation.object_class),
     }
     self.data_tuple = dt
     return predictions
@@ -147,6 +167,9 @@ class Cap2SG(model_base.ModelBase):
     dt.n_proposal = inputs['image/n_proposal']
     dt.proposals = inputs['image/proposal']
     dt.proposal_features = inputs['image/proposal/feature']
+    if self.is_training:
+      dt.proposal_features = tf.nn.dropout(
+          dt.proposal_features, keep_prob=self.options.dropout_keep_prob)
 
     dt.batch = dt.proposals.shape[0].value
     dt.max_n_proposal = tf.shape(dt.proposals)[1]

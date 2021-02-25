@@ -59,12 +59,12 @@ from bert.modeling import transformer_model
 from protos import model_pb2
 
 
-class WSSceneGraphRnnRefine(model_base.ModelBase):
-  """WSSceneGraphRnnRefine model to provide instance-level annotations. """
+class WSSceneGraphRnnRefineV2(model_base.ModelBase):
+  """WSSceneGraphRnnRefineV2 model to provide instance-level annotations. """
 
   def __init__(self, options, is_training):
     """Constructs the WSSceneGraphGNet instance. """
-    super(WSSceneGraphRnnRefine, self).__init__(options, is_training)
+    super(WSSceneGraphRnnRefineV2, self).__init__(options, is_training)
 
     proposal_network_oneof = options.WhichOneof('proposasl_network_oneof')
     if proposal_network_oneof == 'ws_scene_graph_gnet':
@@ -428,9 +428,11 @@ class WSSceneGraphRnnRefine(model_base.ModelBase):
     # Post-process the predictions.
     if not self.is_training:
       graph_proposal_scores = predictions[
-          'refinement/iter_%i/proposal_probas' %
+          'refine@%i/entity_probas' %
           self._proposal_network.options.n_refine_iteration]
-      graph_relation_scores = predictions['refinement/relation_probas']
+      graph_relation_scores = predictions[
+          'refine@%i/relation_probas' %
+          self._proposal_network.options.n_refine_iteration]
       graph_proposal_scores = graph_proposal_scores[:, :, 1:]
       graph_relation_scores = graph_relation_scores[:, :, 1:]
 
@@ -639,9 +641,11 @@ class WSSceneGraphRnnRefine(model_base.ModelBase):
          subject_ids, object_ids, predicate_ids)
 
     proposal_scores_0 = predictions[
-        'refinement/iter_%i/proposal_probas' %
+        'refine@%i/entity_probas' %
         self._proposal_network.options.n_refine_iteration][:, :, 1:]
-    relation_scores_0 = predictions['refinement/relation_probas'][:, :, 1:]
+    relation_scores_0 = predictions[
+        'refine@%i/relation_probas' %
+        self._proposal_network.options.n_refine_iteration][:, :, 1:]
 
     proposal_to_proposal_weight = self._proposal_network.options.joint_inferring_relation_weight
 

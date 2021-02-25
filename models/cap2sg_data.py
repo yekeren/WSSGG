@@ -17,13 +17,16 @@
 class GroundingTuple(object):
 
   # Proposal id to be associated with each text entity, a [batch, max_n_entity] in tensor, each value is in the range [0, max_n_proposal).
-  proposal_id = None
+  entity_proposal_id = None
 
   # Proposal box to be associated with each text entity, a [batch, max_n_entity, 4] float tensor.
-  proposal_box = None
+  entity_proposal_box = None
 
   # Proposal score to be associated with each text entity, a [batch, max_n_entity] float tensor.
-  proposal_score = None
+  entity_proposal_score = None
+
+  # Proposal feature to be associated with each text entity, a [batch, max_n_entity, feature_dims] float tensor.
+  entity_proposal_feature = None
 
 
 class DetectionTuple(object):
@@ -48,6 +51,9 @@ class DetectionTuple(object):
 
   # Detection attribute classes, a [batch, max_n_detetion] string tensor.
   nmsed_attribute_classes = None
+
+  # Detection region features, a [batch, max_n_detection, feature_dims] tensor.
+  nmsed_features = None
 
 
 class RelationTuple(object):
@@ -234,14 +240,40 @@ class DataTuple(object):
   # Objects created by relation.detect_relations.
   ####################################################
 
-  # Relation detection logits, a [batch, max_n_proposal, max_n_proposal, vocab_size] float tensor.
-  relation_instance_logits = None
+  # Subject boxes, a [batch, max_n_relation, 4] float tensor.
+  subject_boxes = None
 
-  # Normalized relation detection scores, a [batch, max_n_proposal, max_n_proposal, vocab_size] float tensor.
-  relation_instance_scores = None
+  # Subject labels, a [batch, max_n_relation] float tensor, each value is in the range [0, vocab_size).
+  subject_labels = None
 
-  # Relation detection labels, a [batch, max_n_proposal, max_n_proposal, vocab_size] float tensor.
-  relation_instance_labels = None
+  # Object boxes, a [batch, max_n_relation, 4] float tensor.
+  object_boxes = None
+
+  # Object labels , a [batch, max_n_relation] float tensor, each value is in the range [0, vocab_size).
+  object_labels = None
+
+  # Predicate labels, a [batch, max_n_relation] float tensor, each value is in the range [0, vocab_size).
+  predicate_labels = None
+
+  # Sequence prediction of subject, a [batch, max_n_relation, vocab_size] float tensor.
+  subject_logits = None
+
+  # Sequence prediction of object, a [batch, max_n_relation, vocab_size] float tensor.
+  object_logits = None
+
+  # Sequence prediction of predicate, a [batch, max_n_relation, vocab_size] float tensor.
+  predicate_logits = None
+
+  # # Relation detection logits, a [batch, max_n_proposal, max_n_proposal, vocab_size] float tensor.
+  # relation_instance_logits = None
+
+  # # Normalized relation detection scores, a [batch, max_n_proposal, max_n_proposal, vocab_size] float tensor.
+  # relation_instance_scores = None
+
+  # # Relation detection labels, a [batch, max_n_proposal, max_n_proposal, vocab_size] float tensor.
+  # relation_instance_labels = None
 
   # Relation results.
   relation = RelationTuple()
+
+  refined_relation = RelationTuple()
