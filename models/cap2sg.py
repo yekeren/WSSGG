@@ -38,6 +38,8 @@ from models.cap2sg_grounding import ground_entities
 from models.cap2sg_detection import detect_entities
 from models.cap2sg_relation import detect_relations
 
+from model_utils.scene_graph_evaluation import SceneGraphEvaluator
+
 
 class Cap2SG(model_base.ModelBase):
   """Cap2SG model to provide instance-level annotations. """
@@ -70,10 +72,16 @@ class Cap2SG(model_base.ModelBase):
     """
     dt = DataTuple()
 
-    dt = initialize(self.options.preprocess_options, dt)
-    dt = self.parse_data_fields(dt, inputs)
+    parse_attribute = (
+        self.is_training and self.options.parse_attribute_in_training or
+        not self.is_training and self.options.parse_attribute_in_evaluation)
 
-    dt = ground_entities(self.options.grounding_options, dt)
+    dt = initialize(self.options.preprocess_options, dt)
+    dt = self.parse_data_fields(dt, inputs, parse_attribute)
+
+    dt = ground_entities(self.options.grounding_options,
+                         dt,
+                         is_training=self.is_training)
     dt = detect_entities(self.options.detection_options, dt)
     dt = detect_relations(self.options.relation_options, dt)
 
@@ -125,7 +133,7 @@ class Cap2SG(model_base.ModelBase):
     self.data_tuple = dt
     return predictions
 
-  def parse_data_fields(self, dt, inputs):
+  def parse_data_fields(self, dt, inputs, parse_attribute=False):
     """Parses data fields from TF record.
 
     Args:
@@ -148,7 +156,8 @@ class Cap2SG(model_base.ModelBase):
 
     # Text graph entity data fields.
     (entities, per_ent_n_att,
-     per_ent_atts) = parse_entity_and_attributes(inputs['caption_graph/nodes'])
+     per_ent_atts) = parse_entity_and_attributes(inputs['caption_graph/nodes'],
+                                                 parse_attribute)
 
     dt.n_entity = inputs['caption_graph/n_node']
     dt.entity_ids = dt.token2id_func(entities)
@@ -292,17 +301,18 @@ class Cap2SG(model_base.ModelBase):
                 dt.attribute_instance_logits,
                 dt.attribute_instance_labels,
                 foreground_mask=True),
-        'relation/relation/loss':
+        'relation/relation/subject_loss':
             self._compute_instance_level_detection_loss(
-                tf.reshape(
-                    tf.multiply(tf.expand_dims(dt.proposal_masks, 2),
-                                tf.expand_dims(dt.proposal_masks, 1)),
-                    [dt.batch, -1]),
-                tf.reshape(dt.relation_instance_logits,
-                           [dt.batch, -1, dt.vocab_size]),
-                tf.reshape(dt.relation_instance_labels,
-                           [dt.batch, -1, dt.vocab_size]),
-                foreground_mask=True),
+                dt.proposal_masks,
+                dt.relation_subject_instance_logits,
+                dt.relation_subject_instance_labels,
+                foreground_mask=False),
+        'relation/relation/object_loss':
+            self._compute_instance_level_detection_loss(
+                dt.proposal_masks,
+                dt.relation_object_instance_logits,
+                dt.relation_object_instance_labels,
+                foreground_mask=False),
     }
     return loss_dict
 
@@ -319,13 +329,36 @@ class Cap2SG(model_base.ModelBase):
         update_op) tuple. see tf.metrics for details.
     """
     metric_dict = {}
-    const_metric = tf.keras.metrics.Mean()
-    const_metric.update_state(1.0)
-    metric_dict['metrics/accuracy'] = const_metric
+
+    dt = self.data_tuple
+    prefix, relation = 'initial_', dt.relation
+
+    eval_dict = {
+        'image_id': inputs['id'],
+        'groundtruth/n_triple': inputs['scene_graph/n_relation'],
+        'groundtruth/subject': inputs['scene_graph/subject'],
+        'groundtruth/subject/box': inputs['scene_graph/subject/box'],
+        'groundtruth/object': inputs['scene_graph/object'],
+        'groundtruth/object/box': inputs['scene_graph/object/box'],
+        'groundtruth/predicate': inputs['scene_graph/predicate'],
+        'prediction/n_triple': relation.num_relations,
+        'prediction/subject/box': relation.subject_box,
+        'prediction/object/box': relation.object_box,
+        'prediction/subject': dt.id2token_func(relation.subject_class),
+        'prediction/object': dt.id2token_func(relation.object_class),
+        'prediction/predicate': dt.id2token_func(relation.relation_class),
+    }
+
+    sg_evaluator = SceneGraphEvaluator()
+    for k, v in sg_evaluator.get_estimator_eval_metric_ops(eval_dict).items():
+      metric_dict['metrics/%s%s' % (prefix, k)] = v
+
+    metric_dict['metrics/accuracy'] = metric_dict[
+        'metrics/initial_scene_graph_per_image_recall@100']
     return metric_dict
 
 
-def parse_entity_and_attributes(entity_and_attributes):
+def parse_entity_and_attributes(entity_and_attributes, parse_attribute=False):
   """Parses entity name and attributes from tensor `strings`.
 
   Args:
@@ -339,9 +372,13 @@ def parse_entity_and_attributes(entity_and_attributes):
   """
   batch = entity_and_attributes.shape[0].value
 
-  split_res = tf.sparse_tensor_to_dense(
-      tf.strings.split(entity_and_attributes, sep=':', maxsplit=1), '')
-  entity, attributes = split_res[:, :, 0], split_res[:, :, 1]
+  if parse_attribute:
+    split_res = tf.sparse_tensor_to_dense(
+        tf.strings.split(entity_and_attributes, sep=':', maxsplit=1), '')
+    entity, attributes = split_res[:, :, 0], split_res[:, :, 1]
+  else:
+    entity = entity_and_attributes
+    attributes = tf.zeros_like(entity, dtype=tf.string)
 
   # Attributes.
   attributes = tf.sparse_tensor_to_dense(
