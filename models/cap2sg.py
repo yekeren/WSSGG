@@ -37,6 +37,8 @@ from models.cap2sg_preprocess import initialize
 from models.cap2sg_grounding import ground_entities
 from models.cap2sg_detection import detect_entities
 from models.cap2sg_relation import detect_relations
+from models.cap2sg_common_sense import apply_common_sense_refinement
+from models.cap2sg_common_sense import train_common_sense_model
 
 from model_utils.scene_graph_evaluation import SceneGraphEvaluator
 
@@ -85,6 +87,12 @@ class Cap2SG(model_base.ModelBase):
     dt = detect_entities(self.options.detection_options, dt)
     dt = detect_relations(self.options.relation_options, dt)
 
+    if self.options.HasField('common_sense_options'):
+      dt = train_common_sense_model(self.options.common_sense_options, dt)
+      dt = apply_common_sense_refinement(self.options.common_sense_options,
+                                         dt,
+                                         reuse=True)
+
     for k, v in vars(dt).items():
       print(k, v)
 
@@ -130,25 +138,25 @@ class Cap2SG(model_base.ModelBase):
         'relation/prediction/object_class':
             dt.id2token_func(dt.relation.object_class),
         'common_sense/prediction/num_relations':
-            dt.relation.num_relations,
+            dt.refined_relation.num_relations,
         'common_sense/prediction/log_prob':
-            dt.relation.log_prob,
+            dt.refined_relation.log_prob,
         'common_sense/prediction/relation_score':
-            dt.relation.relation_score,
+            dt.refined_relation.relation_score,
         'common_sense/prediction/relation_class':
-            dt.id2token_func(dt.relation.relation_class),
+            dt.id2token_func(dt.refined_relation.relation_class),
         'common_sense/prediction/subject_box':
-            dt.relation.subject_box,
+            dt.refined_relation.subject_box,
         'common_sense/prediction/subject_score':
-            dt.relation.subject_score,
+            dt.refined_relation.subject_score,
         'common_sense/prediction/subject_class':
-            dt.id2token_func(dt.relation.subject_class),
+            dt.id2token_func(dt.refined_relation.subject_class),
         'common_sense/prediction/object_box':
-            dt.relation.object_box,
+            dt.refined_relation.object_box,
         'common_sense/prediction/object_score':
-            dt.relation.object_score,
+            dt.refined_relation.object_score,
         'common_sense/prediction/object_class':
-            dt.id2token_func(dt.relation.object_class),
+            dt.id2token_func(dt.refined_relation.object_class),
     }
     self.data_tuple = dt
     return predictions
@@ -176,6 +184,10 @@ class Cap2SG(model_base.ModelBase):
     dt.proposal_masks = tf.sequence_mask(dt.n_proposal,
                                          dt.max_n_proposal,
                                          dtype=tf.float32)
+
+    # Proposal IoU.
+    dt.proposal_iou = box_ops.iou(tf.expand_dims(dt.proposals, 2),
+                                  tf.expand_dims(dt.proposals, 1))
 
     # Text graph entity data fields.
     (entities, per_ent_n_att,
@@ -212,7 +224,7 @@ class Cap2SG(model_base.ModelBase):
                                          dt.max_n_relation,
                                          dtype=tf.float32)
     dt.relation_senders = inputs['caption_graph/senders']
-    dt.relation_receivers = inputs['caption_graph/senders']
+    dt.relation_receivers = inputs['caption_graph/receivers']
     return dt
 
   def _compute_image_level_classification_loss(self, entity_masks, logits,
@@ -307,36 +319,73 @@ class Cap2SG(model_base.ModelBase):
 
     loss_dict = {
         'grounding/entity/loss':
+            self.options.grounding_options.loss_weight *
             self._compute_image_level_classification_loss(
                 dt.entity_masks, dt.entity_image_logits[:, :, 1:],
                 dt.entity_image_labels[:, :, 1:]),
         'grounding/attribute/loss':
+            self.options.grounding_options.loss_weight *
             self._compute_image_level_classification_loss(
                 dt.entity_masks, dt.attribute_image_logits[:, :, 1:],
                 dt.attribute_image_labels[:, :, 1:]),
-        'detection/entity/loss':
-            self._compute_instance_level_detection_loss(
-                dt.proposal_masks, dt.detection_instance_logits,
-                dt.detection_instance_labels),
-        'detection/attribute/loss':
-            self._compute_instance_level_detection_loss(
-                dt.proposal_masks,
-                dt.attribute_instance_logits,
-                dt.attribute_instance_labels,
-                foreground_mask=True),
+        # 'detection/entity/loss':
+        #     self._compute_instance_level_detection_loss(
+        #         dt.proposal_masks, dt.detection_instance_logits,
+        #         dt.detection_instance_labels),
+        # 'detection/attribute/loss':
+        #     self._compute_instance_level_detection_loss(
+        #         dt.proposal_masks,
+        #         dt.attribute_instance_logits,
+        #         dt.attribute_instance_labels,
+        #         foreground_mask=True),
         'relation/relation/subject_loss':
+            self.options.relation_options.loss_weight *
             self._compute_instance_level_detection_loss(
                 dt.proposal_masks,
                 dt.relation_subject_instance_logits,
                 dt.relation_subject_instance_labels,
                 foreground_mask=False),
         'relation/relation/object_loss':
+            self.options.relation_options.loss_weight *
             self._compute_instance_level_detection_loss(
                 dt.proposal_masks,
                 dt.relation_object_instance_logits,
                 dt.relation_object_instance_labels,
                 foreground_mask=False),
     }
+
+    for itno in self.options.detection_options.num_iterations:
+      loss_dict.update({
+          'detection/entity/loss_%i' % itno:
+              self.options.detection_options.loss_weight *
+              self._compute_instance_level_detection_loss(
+                  dt.proposal_masks,
+                  dt.detection_instance_logits_list[itno],
+                  dt.detection_instance_labels_list[itno],
+                  foreground_mask=False)
+      })
+
+    if self.options.HasField('common_sense_options'):
+      loss_dict.update({
+          'common_sense/relation/subject_loss':
+              self.options.common_sense_options.loss_weight *
+              self._compute_instance_level_detection_loss(dt.relation_masks,
+                                                          dt.subject_logits,
+                                                          dt.subject_labels,
+                                                          foreground_mask=True),
+          'common_sense/relation/object_loss':
+              self.options.common_sense_options.loss_weight *
+              self._compute_instance_level_detection_loss(dt.relation_masks,
+                                                          dt.object_logits,
+                                                          dt.object_labels,
+                                                          foreground_mask=True),
+          'common_sense/relation/predicate_loss':
+              self.options.common_sense_options.loss_weight *
+              self._compute_instance_level_detection_loss(dt.relation_masks,
+                                                          dt.predicate_logits,
+                                                          dt.predicate_labels,
+                                                          foreground_mask=True),
+      })
     return loss_dict
 
   def build_metrics(self, inputs, predictions, **kwargs):

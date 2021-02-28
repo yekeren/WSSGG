@@ -52,39 +52,55 @@ def detect_entities(options, dt):
   if not isinstance(dt, DataTuple):
     raise ValueError('Invalid DataTuple object.')
 
+  # Compute proposal iou.
+  propogation_matrix = tf.cast(
+      dt.proposal_iou > options.grounding_iou_threshold, tf.float32)
+
   # Compute detection labels.
-  dt.detection_instance_labels = _scatter_entity_labels(
-      proposal_id=dt.grounding.entity_proposal_id,
-      entity_id=dt.entity_ids,
-      max_n_proposal=dt.max_n_proposal,
-      vocab_size=dt.vocab_size)
-  dt.attribute_instance_labels = _scatter_attribute_labels(
-      proposal_id=dt.grounding.entity_proposal_id,
-      attribute_id=dt.per_ent_att_ids,
-      max_n_proposal=dt.max_n_proposal,
-      vocab_size=dt.vocab_size)
+  dt.detection_instance_labels_list = []
+  dt.detection_instance_logits_list = []
+  dt.detection_instance_scores_list = []
 
-  # Predict detection scores.
-  detection_head, attribute_head = [
-      tf.layers.Dense(dt.dims, activation=None, use_bias=True,
-                      name=name)(dt.proposal_features)
-      for name in ['entity_detection_head', 'attribute_detection_head']
-  ]
-  if options.detection_feature_type == model_pb2.DET_FEATURE_DEFAULT:
-    dt.detection_features = detection_head
-  elif options.detection_feature_type == model_pb2.DET_FEATURE_ADD_ATTRIBUTE:
-    dt.detection_features = tf.concat([detection_head, attribute_head], -1)
-  elif options.detection_feature_type == model_pb2.DET_FEATURE_CNN:
-    dt.detection_features = dt.proposal_features
-  else:
-    raise ValueError('Invalid detection feature type.')
+  entity_proposal_id = dt.grounding.entity_proposal_id
 
-  (dt.detection_instance_logits,
-   dt.detection_instance_scores) = _box_classify(detection_head, dt.embeddings,
-                                                 dt.bias_entity)
-  (dt.attribute_instance_logits,
-   dt.attribute_instance_scores) = _box_classify(attribute_head, dt.embeddings,
-                                                 dt.bias_attribute)
+  for itno in range(options.num_iterations):
+    detection_instance_labels = _scatter_entity_labels(
+        proposal_id=entity_proposal_id,
+        entity_id=dt.entity_ids,
+        max_n_proposal=dt.max_n_proposal,
+        vocab_size=dt.vocab_size)
+    detection_instance_labels = tf.matmul(propogation_matrix,
+                                          detection_instance_labels)
+    dt.detection_instance_labels_list.append(detection_instance_labels)
+
+    # Predict detection scores.
+    detection_head = tf.layers.Dense(dt.dims,
+                                     activation=None,
+                                     name='entity_detection_head_%i' % itno)(
+                                         dt.proposal_features)
+    (detection_instance_logits,
+     detection_instance_scores) = _box_classify(detection_head, dt.embeddings,
+                                                dt.bias_entity)
+    dt.detection_instance_logits_list.append(detection_instance_logits)
+    dt.detection_instance_scores_list.append(detection_instance_scores)
+
+    # Update the proposal id associated to the image-level entity label.
+    dummy_attention = tf.gather_nd(tf.transpose(detection_instance_scores,
+                                                [0, 2, 1]),
+                                   indices=_get_full_indices(dt.entity_ids))
+    entity_proposal_id = tf.math.argmax(dummy_attention,
+                                        axis=2,
+                                        output_type=tf.int32)
+
+  # Save the grounding results.
+  dt.detection_features = detection_head
+  dt.refined_grounding.entity_proposal_id = entity_proposal_id
+  dt.refined_grounding.entity_proposal_score = tf.reduce_max(dummy_attention, 2)
+
+  indices = _get_full_indices(entity_proposal_id)
+  dt.refined_grounding.entity_proposal_box = tf.gather_nd(dt.proposals, indices)
+  dt.refined_grounding.entity_proposal_feature = tf.gather_nd(
+      dt.detection_features, indices)
 
   # Postprocess: non-maximum-suppression.
   post_process = options.post_process
@@ -92,41 +108,27 @@ def detect_entities(options, dt):
    dt.detection.nmsed_classes,
    dt.detection.valid_detections) = tf.image.combined_non_max_suppression(
        tf.expand_dims(dt.proposals, 2),
-       dt.detection_instance_scores[:, :, 1:],
+       detection_instance_scores[:, :, 1:],
        max_output_size_per_class=post_process.max_size_per_class,
        max_total_size=post_process.max_total_size,
        iou_threshold=post_process.iou_thresh,
        score_threshold=post_process.score_thresh)
   dt.detection.nmsed_classes = tf.cast(1 + dt.detection.nmsed_classes, tf.int32)
 
-  # Get the proposal id of the detection box, then fetch the attributes.
-  #   nmsed_proposal shape = [batch, max_total_size, max_n_proposal].
-  #   nmsed_attribute shape [batch, max_total_size, vocab_size]
+  # Get the proposal id of the detection box, then fetch the other information.
   iou = _compute_iou(dt.detection.valid_detections, dt.detection.nmsed_boxes,
                      dt.n_proposal, dt.proposals)
   dt.detection.nmsed_proposal_id = tf.math.argmax(iou,
                                                   axis=2,
                                                   output_type=tf.int32)
   indices = _get_full_indices(dt.detection.nmsed_proposal_id)
-  nmsed_attribute = tf.gather_nd(dt.attribute_instance_scores, indices)
-  dt.detection.nmsed_attribute_scores = tf.reduce_max(nmsed_attribute, -1)
-  dt.detection.nmsed_attribute_classes = tf.argmax(nmsed_attribute,
-                                                   axis=2,
-                                                   output_type=tf.int32)
   dt.detection.nmsed_features = tf.gather_nd(dt.proposal_features, indices)
+  # nmsed_attribute = tf.gather_nd(dt.attribute_instance_scores, indices)
+  # dt.detection.nmsed_attribute_scores = tf.reduce_max(nmsed_attribute, -1)
+  # dt.detection.nmsed_attribute_classes = tf.argmax(nmsed_attribute,
+  #                                                  axis=2,
+  #                                                  output_type=tf.int32)
 
-  # Override grounding results if it is specified.
-  dummy_attention = tf.gather_nd(tf.transpose(dt.detection_instance_scores,
-                                              [0, 2, 1]),
-                                 indices=_get_full_indices(dt.entity_ids))
-  dt.refined_grounding.entity_proposal_id = tf.math.argmax(dummy_attention,
-                                                           axis=2,
-                                                           output_type=tf.int32)
-  indices = _get_full_indices(dt.refined_grounding.entity_proposal_id)
-  dt.refined_grounding.entity_proposal_box = tf.gather_nd(dt.proposals, indices)
-  dt.refined_grounding.entity_proposal_feature = tf.gather_nd(
-      dt.detection_features, indices)
-  dt.refined_grounding.entity_proposal_score = tf.reduce_max(dummy_attention, 2)
   return dt
 
 

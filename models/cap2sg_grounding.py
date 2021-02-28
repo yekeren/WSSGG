@@ -30,8 +30,6 @@ from models import model_base
 from modeling.utils import masked_ops
 from models.cap2sg_data import DataTuple
 
-from bert.modeling import transformer_model
-
 
 def ground_entities(options, dt, is_training):
   """Grounds entities.
@@ -60,18 +58,6 @@ def ground_entities(options, dt, is_training):
                                    activation=tf.math.tanh,
                                    use_bias=True,
                                    name='bert_input')(dt.proposal_features)
-
-  if options.self_attention:
-    hidden_dropout_prob = options.hidden_dropout_prob if is_training else 0.0
-    attention_probs_dropout_prob = options.attention_probs_dropout_prob if is_training else 0.0
-    attention_head = transformer_model(
-        attention_head,
-        hidden_size=hidden_size,
-        num_hidden_layers=options.num_hidden_layers,
-        num_attention_heads=options.num_attention_heads,
-        intermediate_size=options.intermediate_size,
-        hidden_dropout_prob=hidden_dropout_prob,
-        attention_probs_dropout_prob=attention_probs_dropout_prob)
 
   attention_mask = tf.expand_dims(dt.proposal_masks, 1)
 
@@ -102,8 +88,20 @@ def ground_entities(options, dt, is_training):
   dt.attribute_image_logits = _apply_attention(dt.attention, attribute_head,
                                                dt.embeddings, dt.bias_attribute)
 
-  # Set the outputs.
-  dt.grounding.entity_proposal_id = tf.math.argmax(dt.attention,
+  # Multiply two branches.
+  #   dt.attention: [batch, max_n_node, max_n_proposal]
+  #   class_scores: [batch, vocab_size, max_n_proposal]
+  dummy_attention = dt.attention
+  if options.two_branches:
+    class_scores = tf.nn.bias_add(
+        tf.matmul(entity_head, dt.embeddings, transpose_b=True), dt.bias_entity)
+    class_scores = tf.transpose(tf.nn.softmax(class_scores), [0, 2, 1])
+
+    dummy_attention = tf.multiply(
+        dt.attention,
+        tf.gather_nd(class_scores, indices=_get_full_indices(dt.entity_ids)))
+
+  dt.grounding.entity_proposal_id = tf.math.argmax(dummy_attention,
                                                    axis=2,
                                                    output_type=tf.int32)
   indices = tf.stack([
@@ -180,3 +178,21 @@ def _apply_attention(attention_score, class_head, embeddings, bias):
   #   class_logits shape = [batch, max_n_node, vocab_size].
   class_logits = tf.einsum('bnd,vd->bnv', class_repr, embeddings)
   return tf.nn.bias_add(class_logits, bias)
+
+
+def _get_full_indices(index):
+  """Gets full indices from a single index.
+
+  Args:
+    index: A single index, a [batch, max_n_elem] int tensor.
+
+  Returns:
+    indices: Full indices with batch dimension added.
+  """
+  batch, max_n_elem = index.shape[0].value, index.shape[1].value
+  if max_n_elem is None:
+    max_n_elem = tf.shape(index)[1]
+
+  batch_index = tf.broadcast_to(tf.expand_dims(tf.range(batch), 1),
+                                [batch, max_n_elem])
+  return tf.stack([batch_index, index], -1)

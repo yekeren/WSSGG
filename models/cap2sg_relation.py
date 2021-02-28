@@ -62,6 +62,13 @@ def detect_relations(options, dt):
       for x in [subject_proposal_id, object_proposal_id]
   ]
 
+  propogation_matrix = tf.cast(
+      dt.proposal_iou > options.grounding_iou_threshold, tf.float32)
+  dt.relation_subject_instance_labels = tf.matmul(
+      propogation_matrix, dt.relation_subject_instance_labels)
+  dt.relation_object_instance_labels = tf.matmul(
+      propogation_matrix, dt.relation_object_instance_labels)
+
   # Per-proposal relation prediction.
   (dt.relation_subject_instance_logits, dt.relation_object_instance_logits) = [
       _relation_classify(dt.proposal_features,

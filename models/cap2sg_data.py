@@ -213,22 +213,27 @@ class DataTuple(object):
   ####################################################
 
   # Entity detection logits, a [batch, max_n_proposal, vocab_size] float tensor.
-  detecton_instance_logits = None
+  detection_instance_logits = None
+  detection_instance_logits_list = []
 
   # Normalized entity detection scores, a [batch, max_n_proposal, vocab_size] float tensor.
-  detecton_instance_scores = None
+  detection_instance_scores = None
+  detection_instance_scores_list = []
 
   # Entity detection labels, a [batch, max_n_proposal, vocab_size] float tensor.
-  detecton_instance_labels = None
+  detection_instance_labels = None
+  detection_instance_labels_list = []
 
   # Attribute detection logits, a [batch, max_n_proposal, vocab_size] float tensor.
   attribute_instance_logits = None
+  attribute_instance_logits_list = []
 
   # Normalized attribute detection scores, a [batch, max_n_proposal, vocab_size] float tensor.
   attribute_instance_scores = None
 
   # Attribute detection labels, a [batch, max_n_proposal, vocab_size] float tensor.
   attribute_instance_labels = None
+  attribute_instance_labels_list = []
 
   # Detection results.
   detection = DetectionTuple()
