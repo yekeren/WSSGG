@@ -32,6 +32,7 @@ from protos import model_pb2
 from models import model_base
 
 from modeling.utils import masked_ops
+from modeling.utils import box_ops
 from models.cap2sg_data import DataTuple
 from models.cap2sg_preprocess import initialize
 from models.cap2sg_grounding import ground_entities
@@ -113,10 +114,10 @@ class Cap2SG(model_base.ModelBase):
             dt.detection.nmsed_scores,
         'detection/prediction/detection_classes':
             dt.detection.nmsed_classes,
-        'detection/prediction/detection_attribute_scores':
-            dt.detection.nmsed_attribute_scores,
-        'detection/prediction/detection_attribute_classes':
-            dt.id2token_func(dt.detection.nmsed_attribute_classes),
+        # 'detection/prediction/detection_attribute_scores':
+        #     dt.detection.nmsed_attribute_scores,
+        # 'detection/prediction/detection_attribute_classes':
+        #     dt.id2token_func(dt.detection.nmsed_attribute_classes),
         'relation/prediction/num_relations':
             dt.relation.num_relations,
         'relation/prediction/log_prob':
@@ -354,7 +355,7 @@ class Cap2SG(model_base.ModelBase):
                 foreground_mask=False),
     }
 
-    for itno in self.options.detection_options.num_iterations:
+    for itno in range(self.options.detection_options.num_iterations):
       loss_dict.update({
           'detection/entity/loss_%i' % itno:
               self.options.detection_options.loss_weight *
@@ -369,22 +370,25 @@ class Cap2SG(model_base.ModelBase):
       loss_dict.update({
           'common_sense/relation/subject_loss':
               self.options.common_sense_options.loss_weight *
-              self._compute_instance_level_detection_loss(dt.relation_masks,
-                                                          dt.subject_logits,
-                                                          dt.subject_labels,
-                                                          foreground_mask=True),
+              self._compute_instance_level_detection_loss(
+                  dt.relation_masks,
+                  dt.subject_logits,
+                  tf.one_hot(dt.subject_labels, dt.vocab_size),
+                  foreground_mask=True),
           'common_sense/relation/object_loss':
               self.options.common_sense_options.loss_weight *
-              self._compute_instance_level_detection_loss(dt.relation_masks,
-                                                          dt.object_logits,
-                                                          dt.object_labels,
-                                                          foreground_mask=True),
+              self._compute_instance_level_detection_loss(
+                  dt.relation_masks,
+                  dt.object_logits,
+                  tf.one_hot(dt.object_labels, dt.vocab_size),
+                  foreground_mask=True),
           'common_sense/relation/predicate_loss':
               self.options.common_sense_options.loss_weight *
-              self._compute_instance_level_detection_loss(dt.relation_masks,
-                                                          dt.predicate_logits,
-                                                          dt.predicate_labels,
-                                                          foreground_mask=True),
+              self._compute_instance_level_detection_loss(
+                  dt.relation_masks,
+                  dt.predicate_logits,
+                  tf.one_hot(dt.predicate_labels, dt.vocab_size),
+                  foreground_mask=True),
       })
     return loss_dict
 
