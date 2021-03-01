@@ -106,11 +106,10 @@ def detect_relations(options, dt):
   proposals = tf.broadcast_to(
       tf.expand_dims(dt.proposals, 1),
       [dt.batch, options.relation_max_total_size, dt.max_n_proposal, 4])
-  proposal_features = tf.broadcast_to(tf.expand_dims(
-      dt.detection_features, 1), [
-          dt.batch, options.relation_max_total_size, dt.max_n_proposal,
-          dt.detection_features.shape[-1].value
-      ])
+  proposal_features = tf.broadcast_to(tf.expand_dims(dt.proposal_features, 1), [
+      dt.batch, options.relation_max_total_size, dt.max_n_proposal,
+      dt.proposal_features.shape[-1].value
+  ])
 
   index_batch = tf.broadcast_to(tf.expand_dims(tf.range(dt.batch), 1),
                                 [dt.batch, options.relation_max_total_size])

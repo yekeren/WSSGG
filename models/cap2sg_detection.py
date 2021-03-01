@@ -93,14 +93,13 @@ def detect_entities(options, dt):
                                         output_type=tf.int32)
 
   # Save the grounding results.
-  dt.detection_features = detection_head
   dt.refined_grounding.entity_proposal_id = entity_proposal_id
   dt.refined_grounding.entity_proposal_score = tf.reduce_max(dummy_attention, 2)
 
   indices = _get_full_indices(entity_proposal_id)
   dt.refined_grounding.entity_proposal_box = tf.gather_nd(dt.proposals, indices)
   dt.refined_grounding.entity_proposal_feature = tf.gather_nd(
-      dt.detection_features, indices)
+      dt.proposal_features, indices)
 
   # Postprocess: non-maximum-suppression.
   post_process = options.post_process

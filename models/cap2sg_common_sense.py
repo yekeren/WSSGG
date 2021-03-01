@@ -148,43 +148,6 @@ def apply_common_sense_refinement(options, dt, reuse=False):
   return dt
 
 
-def _enumerate_relations(detection_features, detection_boxes):
-  """Enumerates pair-wise relations among the detection results.
-
-  Args:
-    detection_features: Detection features, a [batch, max_n_detection, feature_dims] float tensor.
-    detection_boxes: Detection boxes, a [batch, max_n_detection, 4] float tensor.
-
-  Returns:
-    subject_feature: Enumerated subject features, a [batch, max_n_relation, feature_dims] float tensor.
-    object_feature: Enumerated object features, a [batch, max_n_relation, feature_dims] float tensor.
-    predicate_feature: Enumerated predicate features, a [batch, max_n_relation, feature_dims] float tensor.
-  """
-  batch = detection_features.shape[0].value
-  feature_dims = detection_features.shape[2].value
-  max_n_detection = detection_features.shape[1].value
-  max_n_relation = max_n_detection * max_n_detection
-
-  subject_feature = tf.broadcast_to(
-      tf.expand_dims(detection_features, 2),
-      [batch, max_n_detection, max_n_detection, feature_dims])
-  object_feature = tf.broadcast_to(
-      tf.expand_dims(detection_features, 1),
-      [batch, max_n_detection, max_n_detection, feature_dims])
-
-  subject_box = tf.broadcast_to(tf.expand_dims(detection_boxes, 2),
-                                [batch, max_n_detection, max_n_detection, 4])
-  object_box = tf.broadcast_to(tf.expand_dims(detection_boxes, 1),
-                               [batch, max_n_detection, max_n_detection, 4])
-  predicate_feature = _compute_relation_feature(subject_feature, subject_box,
-                                                object_feature, object_box)
-  return (tf.reshape(subject_feature, [batch, -1, feature_dims]),
-          tf.reshape(object_feature, [batch, -1, feature_dims]),
-          tf.reshape(predicate_feature, [batch, -1, feature_dims]),
-          tf.reshape(subject_box,
-                     [batch, -1, 4]), tf.reshape(object_box, [batch, -1, 4]))
-
-
 def _execute_rnn_once(cell,
                       rnn_vis_input,
                       rnn_txt_input,
