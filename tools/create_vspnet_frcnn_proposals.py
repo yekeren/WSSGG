@@ -37,9 +37,7 @@ from object_detection.builders import model_builder
 from object_detection.protos import pipeline_pb2
 from object_detection.utils import label_map_util
 
-flags.DEFINE_string('train_image_file', '', 'Training image zip file.')
-flags.DEFINE_string('val_image_file', '', 'Validation image zip file.')
-flags.DEFINE_string('test_image_file', '', 'Test image zip file.')
+flags.DEFINE_string('image_dir', '', 'Image directory.')
 flags.DEFINE_string('output_directory', '', 'Output directory.')
 
 flags.DEFINE_integer('number_of_processes', 1, 'Size of the process pool.')
@@ -112,8 +110,13 @@ def _extract_frcnn_proposals(filename, encoded_jpg):
     filename: Filename of the image.
     encoded_jpg: JPG data.
   """
-  file_bytes = np.fromstring(encoded_jpg, dtype=np.uint8)
-  bgr = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+  try:
+    file_bytes = np.fromstring(encoded_jpg, dtype=np.uint8)
+    bgr = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+  except Exception as ex:
+    logging.info('Failed to read the image %s.', filename)
+    return
+
   rgb = bgr[:, :, ::-1]
 
   # Proposal generation.
@@ -139,34 +142,29 @@ def _extract_frcnn_proposals(filename, encoded_jpg):
       filename, len(encoded_jpg), num_proposals, npz_path)
 
 
-def _create_frcnn_proposals_nparray(zip_file):
+def _create_frcnn_proposals_nparray(image_dir):
   """Extracts frcnn proposals from MSCOCO images.
 
   Args:
     zip_file: ZIP file containing the image files.
   """
 
-  def _enum_zip(zip_file):
-    with zipfile.ZipFile(zip_file) as zf:
-      for zi in zf.infolist():
-        if zi.filename.endswith('.jpg'):
-          with zf.open(zi) as fid:
-            encoded_jpg = fid.read()
-            yield zi.filename, encoded_jpg
+  def _enum_dir(image_dir):
+    for filename in os.listdir(image_dir):
+      if filename.endswith('.jpg'):
+        filename = os.path.join(image_dir, filename)
+        with open(filename, 'rb') as fid:
+          encoded_jpg = fid.read()
+          yield filename, encoded_jpg
 
-  with Pool(processes=FLAGS.number_of_processes,
-            initializer=_proc_initializer) as pool:
-    for filename, encoded_jpg in _enum_zip(zip_file):
-      pool.apply_async(_extract_frcnn_proposals, (filename, encoded_jpg))
-    pool.close()
-    pool.join()
+  _proc_initializer()
+  for filename, encoded_jpg in _enum_dir(image_dir):
+    _extract_frcnn_proposals(filename, encoded_jpg)
   logging.info('Done')
 
 
 def main(_):
-  assert FLAGS.train_image_file, '`train_image_file` missing.'
-  assert FLAGS.val_image_file, '`val_image_file` missing.'
-  assert FLAGS.test_image_file, '`test_image_file` missing.'
+  assert FLAGS.image_dir, '`image_dir` missing.'
   assert FLAGS.output_directory, '`output_directory` missing.'
 
   logging.set_verbosity(logging.INFO)
@@ -174,7 +172,7 @@ def main(_):
   for i in range(_NUM_PROPOSAL_SUBDIRS):
     tf.gfile.MakeDirs(os.path.join(FLAGS.output_directory, str(i)))
 
-  _create_frcnn_proposals_nparray(FLAGS.train_image_file)
+  _create_frcnn_proposals_nparray(FLAGS.image_dir)
   # _create_frcnn_proposals_nparray(FLAGS.val_image_file)
   # _create_frcnn_proposals_nparray(FLAGS.test_image_file)
 

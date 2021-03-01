@@ -33,9 +33,7 @@ from graph_nets import utils_np
 flags.DEFINE_string('split_pkl_file', '',
                     'Pickle file denoting the VG train/test splits.')
 flags.DEFINE_string('vg_meta_file', '', 'Json file denoting the VG meta info.')
-flags.DEFINE_string('train_scenegraph_annotations_file', '',
-                    'Scene graph annotations JSON file.')
-flags.DEFINE_string('val_scenegraph_annotations_file', '',
+flags.DEFINE_string('scenegraph_annotations_file', '',
                     'Scene graph annotations JSON file.')
 flags.DEFINE_string('proposal_npz_directory', '',
                     'Path to the directory saving proposal data.')
@@ -109,31 +107,28 @@ def _create_tf_example(annot, num_proposals, proposals, proposal_features):
 
   # Set the scene graph info.
   data_dict_list = []
-  n_entity = []
-  n_relation = []
-  captions = []
+  captions = annot['captions']
+
   for sg in annot['scene_graphs']:
-    assert all((len(x['names']) == 1 for x in sg['objects']))
+    entities, relations = sg['entities'], sg['relations']
 
-    # Nodes (objects + attributes).
-    objects = [x['names'][0] for x in sg['objects']]
-    attributes = [x['attribute'] for x in sg['attributes']]
-    nodes = objects + attributes
-    captions.append(sg['phrase'])
+    # Entities.
+    nodes = []
+    for e in entities:
+      att_str = ','.join([
+          x['span']
+          for x in e['modifiers']
+          if x['dep'] not in ['det', 'nummod']
+      ])
+      nodes.append(e['head'] + (':' + att_str if att_str else ''))
 
-    n_entity.append(len(objects))
-    n_relation.append(len(sg['relationships']))
-
-    # Edges (relationships + attributes), bi-directional.
+    # Edges.
     senders, receivers, edges = [], [], []
-    for r in sg['relationships']:
+    for r in relations:
       senders.append(r['subject'])
       receivers.append(r['object'])
-      edges.append(r['predicate'])
-    for a_id, a in enumerate(sg['attributes']):
-      senders.append(a['subject'])
-      receivers.append(len(objects) + a_id)
-      edges.append(a['predicate'])
+      edges.append(r['relation'])
+
     data_dict_list.append({
         "nodes": nodes,
         "edges": edges,
@@ -143,15 +138,13 @@ def _create_tf_example(annot, num_proposals, proposals, proposal_features):
 
   graphs_tuple = utils_np.data_dicts_to_graphs_tuple(data_dict_list)
   feature_dict.update({
-      'scene_text_graph/caption': _string_feature_list(captions),
-      'scene_text_graph/n_entity': _int64_feature_list(n_entity),
-      'scene_text_graph/n_relation': _int64_feature_list(n_relation),
-      'scene_text_graph/n_node': _int64_feature_list(graphs_tuple.n_node),
-      'scene_text_graph/n_edge': _int64_feature_list(graphs_tuple.n_edge),
-      'scene_text_graph/nodes': _string_feature_list(graphs_tuple.nodes),
-      'scene_text_graph/edges': _string_feature_list(graphs_tuple.edges),
-      'scene_text_graph/senders': _int64_feature_list(graphs_tuple.senders),
-      'scene_text_graph/receivers': _int64_feature_list(graphs_tuple.receivers)
+      'caption_graph/caption': _string_feature_list(captions),
+      'caption_graph/n_node': _int64_feature_list(graphs_tuple.n_node),
+      'caption_graph/n_edge': _int64_feature_list(graphs_tuple.n_edge),
+      'caption_graph/nodes': _string_feature_list(graphs_tuple.nodes),
+      'caption_graph/edges': _string_feature_list(graphs_tuple.edges),
+      'caption_graph/senders': _int64_feature_list(graphs_tuple.senders),
+      'caption_graph/receivers': _int64_feature_list(graphs_tuple.receivers)
   })
 
   tf_example = tf.train.Example(features=tf.train.Features(
@@ -193,7 +186,7 @@ def _create_tf_record_from_annotations(scenegraph_annotations_file,
       proposals = data['proposals']
       proposal_features = data['proposal_features']
 
-      assert num_proposals == 20
+      assert num_proposals == 50
 
     # Encode tf example.
     tf_example = _create_tf_example(annot, num_proposals, proposals,
@@ -210,8 +203,7 @@ def _create_tf_record_from_annotations(scenegraph_annotations_file,
 def main(_):
   assert FLAGS.split_pkl_file, '`split_pkl_file` missing.'
   assert FLAGS.vg_meta_file, '`vg_meta_file` missing.'
-  assert FLAGS.train_scenegraph_annotations_file, '`train_scenegraph_annotations_file` missing.'
-  assert FLAGS.val_scenegraph_annotations_file, '`val_scenegraph_annotations_file` missing.'
+  assert FLAGS.scenegraph_annotations_file, '`scenegraph_annotations_file` missing.'
   assert FLAGS.proposal_npz_directory, '`proposal_npz_directory` missing.'
   assert FLAGS.output_directory, '`output_directory` missing.'
 
@@ -233,12 +225,11 @@ def main(_):
 
   tf.gfile.MakeDirs(FLAGS.output_directory)
 
-  output_train_file = os.path.join(FLAGS.output_directory,
-                                   'scenegraphs_train2017.tfreocrd')
+  output_file = os.path.join(FLAGS.output_directory, 'coco_sgs.tfreocrd')
 
-  _create_tf_record_from_annotations(FLAGS.train_scenegraph_annotations_file,
-                                     FLAGS.proposal_npz_directory,
-                                     output_train_file, 20, invalid_coco_ids)
+  _create_tf_record_from_annotations(FLAGS.scenegraph_annotations_file,
+                                     FLAGS.proposal_npz_directory, output_file,
+                                     20, invalid_coco_ids)
 
   logging.info('Done')
 

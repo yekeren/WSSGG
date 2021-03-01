@@ -151,7 +151,7 @@ def _create_tf_example(image_id, proposals, proposal_features,
 
   feature_dict.update({
       # Triplet.
-      'scene_graph/n_triple':
+      'scene_graph/n_relation':
           _int64_feature(len(subjects)),
       'scene_graph/subject':
           _string_feature_list(subjects),
@@ -178,17 +178,19 @@ def _create_tf_example(image_id, proposals, proposal_features,
       'scene_graph/object/bbox/xmax':
           _float_feature_list(object_boxes[:, 2].tolist()),
       # Scene pseudo graph.
-      'scene_pseudo_graph/n_node':
+      'caption_graph/caption':
+          _string_feature_list(['']),
+      'caption_graph/n_node':
           _int64_feature(scene_graph_ideal_graph['n_node']),
-      'scene_pseudo_graph/n_edge':
+      'caption_graph/n_edge':
           _int64_feature(scene_graph_ideal_graph['n_edge']),
-      'scene_pseudo_graph/nodes':
+      'caption_graph/nodes':
           _string_feature_list(scene_graph_ideal_graph['nodes']),
-      'scene_pseudo_graph/edges':
+      'caption_graph/edges':
           _string_feature_list(scene_graph_ideal_graph['edges']),
-      'scene_pseudo_graph/senders':
+      'caption_graph/senders':
           _int64_feature_list(scene_graph_ideal_graph['senders']),
-      'scene_pseudo_graph/receivers':
+      'caption_graph/receivers':
           _int64_feature_list(scene_graph_ideal_graph['receivers']),
       # Caption pseudo graph.
       'scene_text_graph/caption':
