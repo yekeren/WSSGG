@@ -160,6 +160,10 @@ class Cap2SG(model_base.ModelBase):
             refined_relation.object_score,
         'common_sense/prediction/object_class':
             dt.id2token_func(refined_relation.object_class),
+        'subject_proposal_id':
+            dt.subject_proposal_id,
+        'object_proposal_id':
+            dt.object_proposal_id,
     }
     self.data_tuple = dt
     return predictions
@@ -185,7 +189,7 @@ class Cap2SG(model_base.ModelBase):
                                       keep_prob=dropout_keep_prob)
 
     if self.options.HasField('hidden_units'):
-      proposal_feature = tf.layers.Dense(
+      proposal_features = tf.layers.Dense(
           self.options.hidden_units,
           activation=tf.nn.leaky_relu,
           name='proposal_features')(proposal_features)
@@ -319,6 +323,23 @@ class Cap2SG(model_base.ModelBase):
     return tf.div(tf.reduce_sum(losses * loss_masks),
                   1e-6 + tf.reduce_sum(loss_masks))
 
+  def _compute_triple_entropy_loss(self, loss_masks, logits, labels):
+    """Computes the sigmoid crossentropy loss.
+
+    Args:
+      loss_masks: A [batch, max_n_relation] float tensor.
+      logits: A [batch, max_n_relation, 3] float tensor.
+      labels: A [batch, max_n_relation, 3] float tensor.
+
+    Returns:
+      loss: A scalar tensor.
+    """
+    losses = tf.reduce_sum(
+        tf.nn.sigmoid_cross_entropy_with_logits(labels=labels, logits=logits),
+        -1)
+    return tf.div(tf.reduce_sum(losses * loss_masks),
+                  1e-6 + tf.reduce_sum(loss_masks))
+
   def build_losses(self, inputs, predictions, **kwargs):
     """Computes loss tensors.
 
@@ -381,27 +402,28 @@ class Cap2SG(model_base.ModelBase):
 
     if self.options.HasField('common_sense_options'):
       loss_dict.update({
+          'common_sense/triple/entropy_loss':
+              self.options.common_sense_options.loss_weight *
+              self._compute_triple_entropy_loss(
+                  dt.relation_masks, dt.triple_logits, dt.triple_labels),
           'common_sense/relation/subject_loss':
               self.options.common_sense_options.loss_weight *
-              self._compute_instance_level_detection_loss(
-                  dt.relation_masks,
-                  dt.subject_logits,
-                  tf.one_hot(dt.subject_labels, dt.vocab_size),
-                  foreground_mask=True),
+              self._compute_instance_level_detection_loss(dt.relation_masks,
+                                                          dt.subject_logits,
+                                                          dt.subject_labels,
+                                                          foreground_mask=True),
           'common_sense/relation/object_loss':
               self.options.common_sense_options.loss_weight *
-              self._compute_instance_level_detection_loss(
-                  dt.relation_masks,
-                  dt.object_logits,
-                  tf.one_hot(dt.object_labels, dt.vocab_size),
-                  foreground_mask=True),
+              self._compute_instance_level_detection_loss(dt.relation_masks,
+                                                          dt.object_logits,
+                                                          dt.object_labels,
+                                                          foreground_mask=True),
           'common_sense/relation/predicate_loss':
               self.options.common_sense_options.loss_weight *
-              self._compute_instance_level_detection_loss(
-                  dt.relation_masks,
-                  dt.predicate_logits,
-                  tf.one_hot(dt.predicate_labels, dt.vocab_size),
-                  foreground_mask=True),
+              self._compute_instance_level_detection_loss(dt.relation_masks,
+                                                          dt.predicate_logits,
+                                                          dt.predicate_labels,
+                                                          foreground_mask=True),
       })
     return loss_dict
 

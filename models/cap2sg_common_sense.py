@@ -52,10 +52,7 @@ def apply_common_sense_refinement(options, dt, reuse=False):
 
   subject_vis_feature = dt.relation.subject_feature
   object_vis_feature = dt.relation.object_feature
-  relation_vis_feature = _compute_relation_feature(subject_vis_feature,
-                                                   dt.relation.subject_box,
-                                                   object_vis_feature,
-                                                   dt.relation.object_box)
+  relation_vis_feature = tf.zeros_like(subject_vis_feature)
   max_n_relation = relation_vis_feature.shape[1].value
 
   # Initialize rnn_vis_input.
@@ -279,39 +276,47 @@ def train_common_sense_model(options, dt):
   if not isinstance(dt, DataTuple):
     raise ValueError('Invalid DataTuple object.')
 
-  # Get subject/object/predicate feature/box.
-  #   feature shape = [batch, max_n_edge, feature_dims].
-  #   box shape = [batch, max_n_edge, 4].
+  # Construct the index to indexing subjects and objects.
+  #   index_subject/_object shape = [batch, max_n_relation, 2]
   index_batch = tf.broadcast_to(tf.expand_dims(tf.range(dt.batch), 1),
                                 [dt.batch, dt.max_n_relation])
   index_subject = tf.stack([index_batch, dt.relation_senders], -1)
   index_object = tf.stack([index_batch, dt.relation_receivers], -1)
 
-  (subject_txt_feature, subject_vis_feature, dt.subject_boxes,
-   dt.subject_labels) = (tf.gather_nd(dt.entity_embs, index_subject),
-                         tf.gather_nd(
-                             dt.refined_grounding.entity_proposal_feature,
-                             index_subject),
-                         tf.gather_nd(dt.refined_grounding.entity_proposal_box,
-                                      index_subject),
-                         tf.gather_nd(dt.entity_ids, index_subject))
-
-  (object_txt_feature, object_vis_feature, dt.object_boxes,
-   dt.object_labels) = (tf.gather_nd(dt.entity_embs, index_object),
+  # Get subject text and visual features.
+  (subject_ids, subject_txt_feature, dt.subject_proposal_id,
+   subject_vis_feature,
+   dt.subject_boxes) = (tf.gather_nd(dt.entity_ids, index_subject),
+                        tf.gather_nd(dt.entity_embs, index_subject),
+                        tf.gather_nd(dt.refined_grounding.entity_proposal_id,
+                                     index_subject),
                         tf.gather_nd(
                             dt.refined_grounding.entity_proposal_feature,
-                            index_object),
+                            index_subject),
                         tf.gather_nd(dt.refined_grounding.entity_proposal_box,
-                                     index_object),
-                        tf.gather_nd(dt.entity_ids, index_object))
+                                     index_subject))
+  dt.subject_labels = tf.one_hot(subject_ids, dt.vocab_size)
 
-  dt.predicate_labels = dt.relation_ids
-  relation_vis_feature = _compute_relation_feature(subject_vis_feature,
-                                                   dt.subject_boxes,
-                                                   object_vis_feature,
-                                                   dt.object_boxes)
+  # Get object text and visual features.
+  (object_ids, object_txt_feature, dt.object_proposal_id, object_vis_feature,
+   dt.object_boxes) = (tf.gather_nd(dt.entity_ids, index_object),
+                       tf.gather_nd(dt.entity_embs, index_object),
+                       tf.gather_nd(dt.refined_grounding.entity_proposal_id,
+                                    index_object),
+                       tf.gather_nd(
+                           dt.refined_grounding.entity_proposal_feature,
+                           index_object),
+                       tf.gather_nd(dt.refined_grounding.entity_proposal_box,
+                                    index_object))
+  dt.object_labels = tf.one_hot(object_ids, dt.vocab_size)
 
-  # Create sequence model.
+  # Get predicate text and visual features.
+  zero_relation_vis_feature = tf.zeros_like(subject_vis_feature)
+
+  relation_txt_feature = dt.relation_embs
+  dt.predicate_labels = tf.one_hot(dt.relation_ids, dt.vocab_size)
+
+  # Create RNN sequence model for positive and negative triplets.
   cell_fn = lambda: _create_rnn_cell(
       1,
       dt.dims,
@@ -319,10 +324,36 @@ def train_common_sense_model(options, dt):
       output_keep_prob=options.rnn_output_keep_prob,
       state_keep_prob=options.rnn_state_keep_prob,
       is_training=True)
-  (subject_output, object_output, predicate_output) = _sequence_modeling(
-      subject_vis_feature, object_vis_feature, relation_vis_feature,
-      subject_txt_feature, object_txt_feature, cell_fn)
 
+  (subject_output, object_output,
+   predicate_output, positive_output) = _sequence_modeling(
+       subject_vis_feature, object_vis_feature, zero_relation_vis_feature,
+       subject_txt_feature, object_txt_feature, relation_txt_feature, cell_fn)
+
+  with tf.variable_scope(tf.get_variable_scope(), reuse=True):
+    neg_subject_vis_feature = _sample_negative_visual_features(
+        dt.n_proposal, dt.proposal_features, dt.subject_proposal_id)
+    (_, _, _, negative_subject_output) = _sequence_modeling(
+        neg_subject_vis_feature, object_vis_feature, zero_relation_vis_feature,
+        subject_txt_feature, object_txt_feature, relation_txt_feature, cell_fn)
+
+    neg_object_vis_feature = _sample_negative_visual_features(
+        dt.n_proposal, dt.proposal_features, dt.object_proposal_id)
+    (_, _, _, negative_object_output) = _sequence_modeling(
+        subject_vis_feature, neg_object_vis_feature, zero_relation_vis_feature,
+        subject_txt_feature, object_txt_feature, relation_txt_feature, cell_fn)
+
+  last_output = tf.stack(
+      [positive_output, negative_subject_output, negative_object_output], 2)
+  dt.triple_logits = tf.squeeze(
+      tf.layers.Dense(1, name='triple_logits')(last_output), -1)
+  dt.triple_labels = tf.stack([
+      tf.ones([dt.batch, dt.max_n_relation]),
+      tf.zeros([dt.batch, dt.max_n_relation]),
+      tf.zeros([dt.batch, dt.max_n_relation])
+  ], -1)
+
+  # Add the classifiction layers.
   dt.subject_logits = tf.nn.bias_add(
       tf.matmul(subject_output, dt.embeddings, transpose_b=True),
       dt.bias_entity)
@@ -332,6 +363,28 @@ def train_common_sense_model(options, dt):
       tf.matmul(predicate_output, dt.embeddings, transpose_b=True),
       dt.bias_relation)
   return dt
+
+
+def _sample_negative_visual_features(n_proposal, proposal_features,
+                                     proposal_id_not_equal):
+  """Samples negative visual features.
+
+  Args:
+    n_proposal: Number of proposals, a [batch] int tensor.
+    proposal_features: Proposal features, a [batch, max_n_proposal, feature_dims] tensor.
+    proposal_id_not_equal: Proposal id associated to the entities, a [batch, max_n_relation] int tensor.
+  """
+  # Generate proposal_id tensor that is NOT equal to proposal_id_not_equal.
+  random_offset = tf.random.uniform(shape=tf.shape(proposal_id_not_equal),
+                                    minval=1,
+                                    maxval=9999,
+                                    dtype=tf.int32)
+
+  n_proposal = tf.expand_dims(n_proposal, -1)
+  proposal_id = tf.mod(
+      proposal_id_not_equal + tf.mod(random_offset, n_proposal - 1), n_proposal)
+  indices = _get_full_indices(proposal_id)
+  return tf.gather_nd(proposal_features, indices)
 
 
 def _create_rnn_cell(rnn_layers,
@@ -360,7 +413,7 @@ def _create_rnn_cell(rnn_layers,
 
 def _sequence_modeling(subject_vis_feature, object_vis_feature,
                        relation_vis_feature, subject_txt_feature,
-                       object_txt_feature, cell_fn):
+                       object_txt_feature, relation_txt_feature, cell_fn):
   """Builds sequence model to predict subject, object, and relation.
 
   Args:
@@ -369,26 +422,33 @@ def _sequence_modeling(subject_vis_feature, object_vis_feature,
     relation_vis_feature: A [batch, max_n_edge, feature_dims] float tensor.
     subject_txt_features: A [batch, max_n_edge, dims] float tensor.
     object_txt_features: A [batch, max_n_edge, dims] float tensor.
+    relation_txt_features: A [batch, max_n_edge, dims] float tensor.
     cell_fn: A callable to create the RNN cell.
 
   Returns:
     subject_output: A [batch, max_n_edge, dims] float tensor.
     object_output: A [batch, max_n_edge, dims] float tensor.
     predicate_output: A [batch, max_n_edge, dims] float tensor.
+    triplet_output: A [batch, max_n_edge, dims] float tensor.
   """
   # Fuse the visual and text features.
   start_txt_feature = tf.zeros_like(subject_txt_feature)
-  text_seq_feature = tf.stack(
-      [start_txt_feature, subject_txt_feature, object_txt_feature], 2)
-  visual_seq_feature = tf.stack(
-      [subject_vis_feature, object_vis_feature, relation_vis_feature], 2)
+  stop_vis_feature = tf.zeros_like(subject_vis_feature)
+  text_seq_feature = tf.stack([
+      start_txt_feature, subject_txt_feature, object_txt_feature,
+      relation_txt_feature
+  ], 2)
+  visual_seq_feature = tf.stack([
+      subject_vis_feature, object_vis_feature, relation_vis_feature,
+      stop_vis_feature
+  ], 2)
   seq_feature = tf.concat([visual_seq_feature, text_seq_feature], -1)
 
   # Create RNN model.
-  #   seq_feature shape = [batch * max_n_relation, 3, feature_dims + dims].
-  #   seq_outputs shape = [batch * max_n_relation, 3, dims].
+  #   seq_feature shape = [batch * max_n_relation, 4, feature_dims + dims].
+  #   seq_outputs shape = [batch * max_n_relation, 4, dims].
   batch = seq_feature.shape[0].value
-  seq_feature = tf.reshape(seq_feature, [-1, 3, seq_feature.shape[-1].value])
+  seq_feature = tf.reshape(seq_feature, [-1, 4, seq_feature.shape[-1].value])
 
   seq_outputs, _ = tf.nn.dynamic_rnn(cell=cell_fn(),
                                      inputs=seq_feature,
@@ -398,22 +458,6 @@ def _sequence_modeling(subject_vis_feature, object_vis_feature,
       tf.reshape(x, [batch, -1, x.shape[-1].value])
       for x in tf.unstack(seq_outputs, axis=1)
   ])
-
-
-def _compute_relation_feature(subject_feature, subject_box, object_feature,
-                              object_box):
-  """Computes the relation feature.
-
-  Args:
-    subject_features: A [batch, max_n_edge, feature_dims] float tensor.
-    subject_box: A [batch, max_n_edge, 4] float tensor.
-    object_features: A [batch, max_n_edge, feature_dims] float tensor.
-    object_box: A [batch, max_n_edge, 4] float tensor.
-
-  Returns:
-    relation_feature: A [batch, max_n_edge, feature_dims] float tensor.
-  """
-  return tf.multiply(subject_feature, object_feature)
 
 
 def _beam_search_post_process(n_triple,
@@ -618,3 +662,21 @@ def _beam_search_post_process(n_triple,
   return (n_valid_example, best_scores, ret_subject, ret_subject_score,
           ret_subject_box, ret_object, ret_object_score, ret_object_box,
           ret_predicate, ret_predicate_score)
+
+
+def _get_full_indices(index):
+  """Gets full indices from a single index.
+
+  Args:
+    index: A single index, a [batch, max_n_elem] int tensor.
+
+  Returns:
+    indices: Full indices with batch dimension added.
+  """
+  batch, max_n_elem = index.shape[0].value, index.shape[1].value
+  if max_n_elem is None:
+    max_n_elem = tf.shape(index)[1]
+
+  batch_index = tf.broadcast_to(tf.expand_dims(tf.range(batch), 1),
+                                [batch, max_n_elem])
+  return tf.stack([batch_index, index], -1)
