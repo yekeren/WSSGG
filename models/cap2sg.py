@@ -35,11 +35,12 @@ from modeling.utils import masked_ops
 from modeling.utils import box_ops
 from models.cap2sg_data import DataTuple
 from models.cap2sg_preprocess import initialize
+from models.cap2sg_linguistic import enrich_features
 from models.cap2sg_grounding import ground_entities
 from models.cap2sg_detection import detect_entities
 from models.cap2sg_relation import detect_relations
-from models.cap2sg_common_sense import apply_common_sense_refinement
 from models.cap2sg_common_sense import train_common_sense_model
+from models.cap2sg_common_sense import apply_common_sense_refinement
 
 from model_utils.scene_graph_evaluation import SceneGraphEvaluator
 
@@ -82,12 +83,21 @@ class Cap2SG(model_base.ModelBase):
     dt = initialize(self.options.preprocess_options, dt)
     dt = self.parse_data_fields(dt, inputs, parse_attribute)
 
+    if self.options.HasField('linguistic_options'):
+      dt = enrich_features(self.options.linguistic_options, dt)
+
+    # Grounding.
     dt = ground_entities(self.options.grounding_options,
                          dt,
                          is_training=self.is_training)
+
+    # Entity detection.
     dt = detect_entities(self.options.detection_options, dt)
+
+    # Relation detection.
     dt = detect_relations(self.options.relation_options, dt)
 
+    # Common-sense refinement.
     refined_relation = dt.relation
     if self.options.HasField('common_sense_options'):
       dt = train_common_sense_model(self.options.common_sense_options, dt)
@@ -192,6 +202,7 @@ class Cap2SG(model_base.ModelBase):
       proposal_features = tf.layers.Dense(
           self.options.hidden_units,
           activation=tf.nn.leaky_relu,
+          kernel_initializer='glorot_normal',
           name='proposal_features')(proposal_features)
       proposal_features = tf.nn.dropout(proposal_features,
                                         keep_prob=dropout_keep_prob)
@@ -363,10 +374,6 @@ class Cap2SG(model_base.ModelBase):
             self._compute_image_level_classification_loss(
                 dt.entity_masks, dt.attribute_image_logits[:, :, 1:],
                 dt.attribute_image_labels[:, :, 1:]),
-        # 'detection/entity/loss':
-        #     self._compute_instance_level_detection_loss(
-        #         dt.proposal_masks, dt.detection_instance_logits,
-        #         dt.detection_instance_labels),
         # 'detection/attribute/loss':
         #     self._compute_instance_level_detection_loss(
         #         dt.proposal_masks,
@@ -403,7 +410,7 @@ class Cap2SG(model_base.ModelBase):
     if self.options.HasField('common_sense_options'):
       loss_dict.update({
           'common_sense/triple/entropy_loss':
-              self.options.common_sense_options.loss_weight *
+              self.options.common_sense_options.triple_loss_weight *
               self._compute_triple_entropy_loss(
                   dt.relation_masks, dt.triple_logits, dt.triple_labels),
           'common_sense/relation/subject_loss':

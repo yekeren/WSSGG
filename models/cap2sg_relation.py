@@ -144,6 +144,7 @@ def _relation_classify(proposal_features, embeddings, bias, name=None):
   relation_head = tf.layers.Dense(embeddings.shape[-1].value,
                                   activation=None,
                                   use_bias=True,
+                                  kernel_initializer='glorot_normal',
                                   name=name)(proposal_features)
   relation_logits = tf.matmul(relation_head, embeddings, transpose_b=True)
   return tf.nn.bias_add(relation_logits, bias)

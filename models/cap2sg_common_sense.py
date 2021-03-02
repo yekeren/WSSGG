@@ -105,6 +105,14 @@ def apply_common_sense_refinement(options, dt, reuse=False):
     # Update input text feature.
     rnn_text_feature = dt.embedding_func(search_tokens[-1])
 
+  triple_logits, _ = _execute_rnn_final(
+      cell,
+      rnn_vis_input=tf.zeros_like(rnn_vis_feature),
+      rnn_txt_input=rnn_text_feature,
+      current_states=current_states,
+      reuse=True)
+  triple_logits = tf.reshape(triple_logits, [batch, max_n_relation, beam_size])
+
   # Backtrack the solutions.
   _reshape_list = lambda x: [
       tf.reshape(e, [batch, max_n_relation, beam_size]) for e in x
@@ -116,14 +124,11 @@ def apply_common_sense_refinement(options, dt, reuse=False):
   # Backtrack the paths.
   selected_tokens, selected_accum_log_probs = _backtrack_solutions(
       search_path, search_tokens, search_log_probs)
+
   accum_log_probs = selected_accum_log_probs[-1]
+  #accum_log_probs = triple_logits  # TODO
 
   # Postprocess the beam search results.
-  subject_log_prob = tf.expand_dims(
-      tf.log(tf.maximum(1e-6, dt.relation.subject_score)), -1)
-  object_log_prob = tf.expand_dims(
-      tf.log(tf.maximum(1e-6, dt.relation.object_score)), -1)
-
   (dt.refined_relation.num_relations, dt.refined_relation.log_prob,
    dt.refined_relation.subject_class, dt.refined_relation.subject_score,
    dt.refined_relation.subject_box, dt.refined_relation.object_class,
@@ -135,11 +140,11 @@ def apply_common_sense_refinement(options, dt, reuse=False):
        dt.relation.object_box,
        accum_log_probs,
        selected_tokens[0],
-       selected_accum_log_probs[0],
+       tf.exp(selected_accum_log_probs[0]),
        selected_tokens[1],
-       selected_accum_log_probs[1] - selected_accum_log_probs[0],
+       tf.exp(selected_accum_log_probs[1] - selected_accum_log_probs[0]),
        selected_tokens[2],
-       selected_accum_log_probs[2] - selected_accum_log_probs[1],
+       tf.exp(selected_accum_log_probs[2] - selected_accum_log_probs[1]),
        iou_thresh=0.5,
        max_total_size=options.relation_max_total_size)
   return dt
@@ -175,6 +180,36 @@ def _execute_rnn_once(cell,
   rnn_logits = tf.nn.bias_add(
       tf.matmul(rnn_output, embeddings, transpose_b=True), bias)
   return rnn_logits, current_states
+
+
+def _execute_rnn_final(cell,
+                       rnn_vis_input,
+                       rnn_txt_input,
+                       current_states,
+                       reuse=True):
+  """Executes the RNN final step.
+
+  Args:
+    cell: RNN cell.
+    rnn_vis_input: RNN visual input, a [batch * max_n_relation * beam_size, dims] tensor.
+    rnn_txt_input: RNN text input, a [batch * max_n_relation * beam_size, dims] tensor.
+    current_states: A tuple storing the `c` and `h` states of the LSTM.
+    reuse: If true, reuse rnn variable.
+
+  Returns:
+    triple_logits: A [batch * max_n_relation * beam_size, 1] float tensor.
+    current_states: Updated RNN states.
+  """
+  rnn_input = tf.concat([rnn_vis_input, rnn_txt_input], -1)
+  with tf.variable_scope(tf.get_variable_scope(), reuse=reuse):
+    rnn_output, current_states = cell(rnn_input,
+                                      current_states,
+                                      scope='rnn/multi_rnn_cell')
+    triple_logits = tf.layers.dense(rnn_output,
+                                    1,
+                                    kernel_initializer='glorot_normal',
+                                    name='triple_logits')
+  return triple_logits, current_states
 
 
 def _lift_rnn_state(current_states, beam_size):
@@ -346,7 +381,10 @@ def train_common_sense_model(options, dt):
   last_output = tf.stack(
       [positive_output, negative_subject_output, negative_object_output], 2)
   dt.triple_logits = tf.squeeze(
-      tf.layers.Dense(1, name='triple_logits')(last_output), -1)
+      tf.layers.dense(last_output,
+                      1,
+                      kernel_initializer='glorot_normal',
+                      name='triple_logits'), -1)
   dt.triple_labels = tf.stack([
       tf.ones([dt.batch, dt.max_n_relation]),
       tf.zeros([dt.batch, dt.max_n_relation]),

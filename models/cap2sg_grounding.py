@@ -55,15 +55,19 @@ def ground_entities(options, dt, is_training):
   # Compute the attention head.
   hidden_size = dt.dims
   attention_head = tf.layers.Dense(hidden_size,
-                                   activation=tf.math.tanh,
+                                   activation=None,
                                    use_bias=True,
-                                   name='bert_input')(dt.proposal_features)
+                                   kernel_initializer='glorot_normal',
+                                   name='attention_head')(dt.proposal_features)
 
   attention_mask = tf.expand_dims(dt.proposal_masks, 1)
 
   # Compute the entity head and attribute head.
   entity_head, attribute_head = [
-      tf.layers.Dense(dt.dims, activation=None, use_bias=True,
+      tf.layers.Dense(dt.dims,
+                      activation=None,
+                      use_bias=True,
+                      kernel_initializer='glorot_normal',
                       name=name)(dt.proposal_features)
       for name in ['entity_head', 'attribute_head']
   ]
@@ -77,12 +81,10 @@ def ground_entities(options, dt, is_training):
                                  tf.cast(random_mask, tf.float32))
   dt.attention = _compute_attention(
       tf.add(
-          dt.entity_embs,
+          dt.refined_entity_embs
+          if dt.refined_entity_embs is not None else dt.entity_embs,
           _compute_attribute_embeddings(dt.per_ent_n_att, dt.per_ent_att_embs)),
       attention_head, attention_mask)
-  # if is_training:
-  #   dt.attention = tf.nn.dropout(
-  #       dt.attention, keep_prob=options.midn_attention_dropout_keep_prob)
   dt.entity_image_logits = _apply_attention(dt.attention, entity_head,
                                             dt.embeddings, dt.bias_entity)
   dt.attribute_image_logits = _apply_attention(dt.attention, attribute_head,
@@ -96,7 +98,6 @@ def ground_entities(options, dt, is_training):
     class_scores = tf.nn.bias_add(
         tf.matmul(entity_head, dt.embeddings, transpose_b=True), dt.bias_entity)
     class_scores = tf.transpose(tf.nn.softmax(class_scores), [0, 2, 1])
-
     dummy_attention = tf.multiply(
         dt.attention,
         tf.gather_nd(class_scores, indices=_get_full_indices(dt.entity_ids)))

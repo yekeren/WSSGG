@@ -159,6 +159,9 @@ class DataTuple(object):
   # Text entity embeddings, a [batch, max_n_entity, dims] float tensor.
   entity_embs = None
 
+  # Refined text entity embeddings, a [batch, max_n_entity, dims] float tensor.
+  refined_entity_embs = None
+
   # Number of attributes per each text entity, a [batch, max_n_entity] int tensor.
   per_ent_n_att = None
 
@@ -188,6 +191,9 @@ class DataTuple(object):
 
   # Text relation embeddings, a [batch, max_n_relation, dims] float tensor.
   relation_embs = None
+
+  # Refined text relation embeddings, a [batch, max_n_relation, dims] float tensor.
+  refined_relation_embs = None
 
   # Index of the subject entity, referring the entity in the entity_ids, a [batch, max_n_relation] int tensor, each value is in the range [0, max_n_entity].
   relation_senders = None

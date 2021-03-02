@@ -76,6 +76,7 @@ def detect_entities(options, dt):
     # Predict detection scores.
     detection_head = tf.layers.Dense(dt.dims,
                                      activation=None,
+                                     kernel_initializer='glorot_normal',
                                      name='entity_detection_head_%i' % itno)(
                                          dt.proposal_features)
     (detection_instance_logits,
