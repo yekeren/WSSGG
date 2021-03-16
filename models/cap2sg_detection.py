@@ -62,7 +62,6 @@ def detect_entities(options, dt):
   dt.detection_instance_scores_list = []
 
   entity_proposal_id = dt.grounding.entity_proposal_id
-
   for itno in range(options.num_iterations):
     detection_instance_labels = _scatter_entity_labels(
         proposal_id=entity_proposal_id,
@@ -92,6 +91,20 @@ def detect_entities(options, dt):
     entity_proposal_id = tf.math.argmax(dummy_attention,
                                         axis=2,
                                         output_type=tf.int32)
+  # Compute attribute labels.
+  if options.predict_attributes:
+    dt.attribute_instance_labels = _scatter_attribute_labels(
+        dt.grounding.entity_proposal_id, dt.per_ent_att_ids, dt.max_n_proposal,
+        dt.vocab_size)
+    attribute_head = tf.layers.Dense(dt.dims,
+                                     activation=None,
+                                     kernel_initializer='glorot_normal',
+                                     name='attribute_detection_head')(
+                                         dt.proposal_features)
+    (dt.attribute_instance_logits,
+     dt.attribute_instance_scores) = _box_classify(attribute_head,
+                                                   dt.embeddings,
+                                                   dt.bias_attribute)
 
   # Save the grounding results.
   dt.refined_grounding.entity_proposal_id = entity_proposal_id

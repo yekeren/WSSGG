@@ -80,6 +80,9 @@ class Cap2SG(model_base.ModelBase):
         self.is_training and self.options.parse_attribute_in_training or
         not self.is_training and self.options.parse_attribute_in_evaluation)
 
+    if self.options.preprocess_options.HasField('closed_vocabulary_file') and not self.is_training:
+      self.options.preprocess_options.vocabulary_file = self.options.preprocess_options.closed_vocabulary_file
+
     dt = initialize(self.options.preprocess_options, dt)
     dt = self.parse_data_fields(dt, inputs, parse_attribute)
 
@@ -170,11 +173,14 @@ class Cap2SG(model_base.ModelBase):
             refined_relation.object_score,
         'common_sense/prediction/object_class':
             dt.id2token_func(refined_relation.object_class),
+    }
+    if self.options.HasField('common_sense_options'):
+      predictions.update({
         'subject_proposal_id':
             dt.subject_proposal_id,
         'object_proposal_id':
             dt.object_proposal_id,
-    }
+        })
     self.data_tuple = dt
     return predictions
 
@@ -374,12 +380,6 @@ class Cap2SG(model_base.ModelBase):
             self._compute_image_level_classification_loss(
                 dt.entity_masks, dt.attribute_image_logits[:, :, 1:],
                 dt.attribute_image_labels[:, :, 1:]),
-        # 'detection/attribute/loss':
-        #     self._compute_instance_level_detection_loss(
-        #         dt.proposal_masks,
-        #         dt.attribute_instance_logits,
-        #         dt.attribute_instance_labels,
-        #         foreground_mask=True),
         'relation/relation/subject_loss':
             self.options.relation_options.loss_weight *
             self._compute_instance_level_detection_loss(
@@ -395,6 +395,17 @@ class Cap2SG(model_base.ModelBase):
                 dt.relation_object_instance_labels,
                 foreground_mask=False),
     }
+
+    if self.options.detection_options.predict_attributes:
+      loss_dict.update({
+        'detection/attribute/loss':
+            self.options.detection_options.loss_weight *
+            self._compute_instance_level_detection_loss(
+                dt.proposal_masks,
+                dt.attribute_instance_logits,
+                dt.attribute_instance_labels,
+                foreground_mask=True),
+        })
 
     for itno in range(self.options.detection_options.num_iterations):
       loss_dict.update({

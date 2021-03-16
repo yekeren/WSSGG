@@ -95,7 +95,7 @@ def _read_vocabulary(vocabulary_file, glove_dict, min_freq):
     for line in f:
       elems = line.strip('\n').split('\t')
       if len(elems) == 1:
-        token, freq = elems[0], 1000
+        token, freq = elems[0].lower(), 1000
       elif len(elems) == 2:
         token, freq = elems
 
@@ -122,9 +122,13 @@ def _initialize_from_glove(glove_dict, token2id, embedding_dims):
 
   embeddings = np.zeros((len(token2id), embedding_dims), dtype=np.float32)
   for multi_word_token, token_id in token2id.items():
+    total = 0
     for word in multi_word_token.split(' '):
       if word in glove_dict:
         embeddings[token_id] += glove_dict[word]
+        total += 1
+    assert total > 0 or multi_word_token == 'OOV'
+    embeddings[token_id] /= max(1e-6, total)
   return embeddings
 
 

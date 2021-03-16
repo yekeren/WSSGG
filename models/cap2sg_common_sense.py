@@ -71,7 +71,7 @@ def apply_common_sense_refinement(options, dt, reuse=False):
   ]
 
   # Initialize RNN cell.
-  cell = _create_rnn_cell(1, dt.dims, is_training=False)
+  cell = _create_rnn_cell(1, options.rnn_hidden_units, is_training=False)
   current_states = cell.zero_state(batch_size=(batch * max_n_relation),
                                    dtype=tf.float32)
 
@@ -125,8 +125,18 @@ def apply_common_sense_refinement(options, dt, reuse=False):
   selected_tokens, selected_accum_log_probs = _backtrack_solutions(
       search_path, search_tokens, search_log_probs)
 
-  accum_log_probs = selected_accum_log_probs[-1]
-  #accum_log_probs = triple_logits  # TODO
+  if options.relation_scoring_method == model_pb2.REL_LANGUAGE_SCORE_ONLY:
+    accum_log_probs = selected_accum_log_probs[-1]
+  elif options.relation_scoring_method == model_pb2.REL_RANKING_SCORE_ONLY:
+    accum_log_probs = tf.log(tf.maximum(1e-6, tf.nn.sigmoid(triple_logits)))
+  elif options.relation_scoring_method == model_pb2.REL_MIXED_SCORE:
+    accum_log_probs = tf.add(
+        tf.multiply(options.ranking_score_weight,
+                    tf.log(tf.maximum(1e-6, tf.nn.sigmoid(triple_logits)))),
+        selected_accum_log_probs[-1])
+  else:
+    raise ValueError("Invalid relation scoring method.")
+
 
   # Postprocess the beam search results.
   (dt.refined_relation.num_relations, dt.refined_relation.log_prob,
@@ -177,8 +187,7 @@ def _execute_rnn_once(cell,
     rnn_output, current_states = cell(rnn_input,
                                       current_states,
                                       scope='rnn/multi_rnn_cell')
-  rnn_logits = tf.nn.bias_add(
-      tf.matmul(rnn_output, embeddings, transpose_b=True), bias)
+  rnn_logits = _rnn_classify(rnn_output, embeddings, bias, reuse)
   return rnn_logits, current_states
 
 
@@ -241,6 +250,14 @@ def _save_beam_search_path(accum_log_probs, beam_size, vocab_size, search_path,
     search_tokens: A list of [batch * max_n_relation * beam_size] tensors, token id selected.
     search_log_probs: A list of [batch * max_n_relation * beam_size, 1] tensors, saving the optimal log probabilities.
   """
+  last_dims = accum_log_probs.shape[-1]
+  accum_log_probs = tf.reshape(accum_log_probs, [-1, last_dims // vocab_size, vocab_size])
+  accum_log_probs = tf.concat([
+      tf.fill([tf.shape(accum_log_probs)[0], last_dims // vocab_size, 1], -9999.0),
+      accum_log_probs[:, :, 1:]
+  ], -1)
+  accum_log_probs = tf.reshape(accum_log_probs, [-1, last_dims])
+
   # The indices returned by top_k involve both the token id and the previous solution info.
   #   Note: accum_log_probs shape = [batch * max_n_relation, beam_size * vocab].
   best_log_probs, indices = tf.nn.top_k(accum_log_probs, beam_size)
@@ -354,7 +371,7 @@ def train_common_sense_model(options, dt):
   # Create RNN sequence model for positive and negative triplets.
   cell_fn = lambda: _create_rnn_cell(
       1,
-      dt.dims,
+      options.rnn_hidden_units,
       input_keep_prob=options.rnn_input_keep_prob,
       output_keep_prob=options.rnn_output_keep_prob,
       state_keep_prob=options.rnn_state_keep_prob,
@@ -392,15 +409,32 @@ def train_common_sense_model(options, dt):
   ], -1)
 
   # Add the classifiction layers.
-  dt.subject_logits = tf.nn.bias_add(
-      tf.matmul(subject_output, dt.embeddings, transpose_b=True),
-      dt.bias_entity)
-  dt.object_logits = tf.nn.bias_add(
-      tf.matmul(object_output, dt.embeddings, transpose_b=True), dt.bias_entity)
-  dt.predicate_logits = tf.nn.bias_add(
-      tf.matmul(predicate_output, dt.embeddings, transpose_b=True),
-      dt.bias_relation)
+  dt.subject_logits = _rnn_classify(subject_output,
+                                    dt.embeddings,
+                                    dt.bias_entity,
+                                    reuse=False)
+  dt.object_logits = _rnn_classify(object_output,
+                                   dt.embeddings,
+                                   dt.bias_entity,
+                                   reuse=True)
+  dt.predicate_logits = _rnn_classify(predicate_output,
+                                      dt.embeddings,
+                                      dt.bias_relation,
+                                      reuse=True)
   return dt
+
+
+def _rnn_classify(rnn_output, embeddings, bias, reuse=False):
+  """Converts rnn output to logits."""
+  if rnn_output.shape[-1].value != embeddings.shape[-1].value:
+    with tf.variable_scope(tf.get_variable_scope(), reuse=reuse):
+      rnn_output = tf.layers.dense(rnn_output,
+                                   embeddings.shape[-1].value,
+                                   activation=None,
+                                   kernel_initializer='glorot_normal',
+                                   name='rnn_classify')
+  return tf.nn.bias_add(tf.matmul(rnn_output, embeddings, transpose_b=True),
+                        bias)
 
 
 def _sample_negative_visual_features(n_proposal, proposal_features,
