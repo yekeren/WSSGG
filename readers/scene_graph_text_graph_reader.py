@@ -137,6 +137,10 @@ def _parse_single_example(example, options):
                                           0))
   num_graphs = utils_tf.get_num_graphs(graphs)
   index = tf.random.uniform([], minval=0, maxval=num_graphs, dtype=tf.int32)
+  # if options.graph_index >= 0:
+  #   index = options.graph_index
+  # else:
+  #   index = tf.random.uniform([], minval=0, maxval=num_graphs, dtype=tf.int32)
   text_graph = utils_tf.get_graph(graphs, index)
   text_graph_n_entity = tf.sparse_tensor_to_dense(
       parsed['scene_text_graph/n_entity'])[index]

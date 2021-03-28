@@ -188,10 +188,9 @@ def _create_dataset(options, is_training, input_pipeline_context=None):
   batch_size = options.batch_size
   dataset = tf.data.Dataset.list_files(options.input_pattern[:],
                                        shuffle=is_training)
+  parse_fn = lambda x: _parse_single_example(x, options)
   dataset = dataset.interleave(tf.data.TFRecordDataset,
                                cycle_length=options.interleave_cycle_length)
-
-  parse_fn = lambda x: _parse_single_example(x, options)
   dataset = dataset.map(map_func=parse_fn,
                         num_parallel_calls=options.num_parallel_calls)
 

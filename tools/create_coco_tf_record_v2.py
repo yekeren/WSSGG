@@ -186,7 +186,9 @@ def _create_tf_record_from_annotations(scenegraph_annotations_file,
       proposals = data['proposals']
       proposal_features = data['proposal_features']
 
-      assert num_proposals == 50
+      # TODO, trim flag.
+      num_proposals = 20
+      proposals, proposal_features = proposals[:20, :], proposal_features[:20, :]
 
     # Encode tf example.
     tf_example = _create_tf_example(annot, num_proposals, proposals,

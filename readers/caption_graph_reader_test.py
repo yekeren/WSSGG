@@ -32,9 +32,10 @@ class CapGraphReaderTest(tf.test.TestCase):
 
   def test_get_input_fn(self):
     batch_size = 17
+    # input_pattern: "data-mscoco/tfrecords_v2_prop50_iou/coco_sgs.tfreocrd-00000-of-00020"
     options_str = r"""
       caption_graph_reader {
-        input_pattern: "/own_files/yekeren/WSSGG/data-mscoco/tfrecords_v2/coco_sgs.tfreocrd-00000-of-00020"
+        input_pattern: "/own_files/yekeren/WSSGG/data-vspnet/tfrecords/caption-graph-hanwang-v1/train.tfrecord*"
         batch_size: %i
         shuffle_buffer_size: 500
         prefetch_buffer_size: 500
@@ -46,6 +47,8 @@ class CapGraphReaderTest(tf.test.TestCase):
 
     dataset = reader.get_input_fn(options, is_training=False)()
     for elem in dataset.take(1):
+      import pdb
+      pdb.set_trace()
       self.assertAllEqual(elem['id'].shape, [batch_size])
       self.assertAllEqual(elem['image/n_proposal'].shape, [batch_size])
       self.assertAllEqual(elem['image/proposal'].shape, [batch_size, 20, 4])

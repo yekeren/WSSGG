@@ -18,6 +18,7 @@ from absl import logging
 import numpy as np
 import tensorflow as tf
 
+import tf_slim as slim
 from protos import model_pb2
 from models.cap2sg_data import DataTuple
 
@@ -36,6 +37,8 @@ def enrich_features(options, dt):
 
   if not isinstance(dt, DataTuple):
     raise ValueError('Invalid DataTuple object.')
+  
+  regularizer = slim.l2_regularizer(scale=float(options.weight_decay))
 
   gn = graph_networks.build_graph_network(options.graph_network,
                                           is_training=True)
@@ -45,7 +48,8 @@ def enrich_features(options, dt):
       batch_nodes=dt.entity_embs,
       batch_edges=dt.relation_embs,
       batch_senders=dt.relation_senders,
-      batch_receivers=dt.relation_receivers)
+      batch_receivers=dt.relation_receivers,
+      regularizer=regularizer)
 
   dt.refined_entity_embs = entity_embs
   dt.refined_relation_embs = relation_embs

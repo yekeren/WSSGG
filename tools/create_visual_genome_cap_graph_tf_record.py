@@ -28,11 +28,14 @@ import gc
 
 import numpy as np
 import tensorflow as tf
+from graph_nets import utils_np
 
 from modeling.utils.box_ops import py_iou
 
 gc.disable()
 
+flags.DEFINE_string('text_graphs_json_file', '',
+                    'Json file storing the text graphs.')
 flags.DEFINE_string('split_pkl_file', '',
                     'Pickle file denoting the train/test splits.')
 flags.DEFINE_integer('num_val_examples', 1000,
@@ -136,11 +139,11 @@ def _create_tf_example(image_id, proposals, proposal_features, scene_graph,
   feature_dict.update({
       # Caption pseudo graph.
       'caption_graph/caption':
-          _string_feature_list([caption_graph['caption']]),
+          _string_feature_list(caption_graph['caption']),
       'caption_graph/n_node':
-          _int64_feature(caption_graph['n_node']),
+          _int64_feature_list(caption_graph['n_node']),
       'caption_graph/n_edge':
-          _int64_feature(caption_graph['n_edge']),
+          _int64_feature_list(caption_graph['n_edge']),
       'caption_graph/nodes':
           _string_feature_list(caption_graph['nodes']),
       'caption_graph/edges':
@@ -233,7 +236,7 @@ def _insert_entity(entity_names, entity_boxes, box, name):
 
 
 def _read_scene_graph_annotations_keyed_by_image_id(scene_graph_pkl_file,
-                                                    scene_graph_meta):
+                                                    scene_graph_meta, id_to_textgraph):
   """Reads scene graphs keyed by image id.
 
   Args:
@@ -270,10 +273,6 @@ def _read_scene_graph_annotations_keyed_by_image_id(scene_graph_pkl_file,
     sg_sub_names, sg_obj_names, sg_pred_names = [], [], []
     sg_sub_boxes, sg_obj_boxes = [], []
 
-    # Caption graph data (cg_*).
-    cg_ent_names, cg_ent_boxes, cg_rel_names = [], [], []
-    cg_sub_ent_ids, cg_obj_ent_ids = [], []
-
     scene_graph = []
     for triple in triples:
       try:
@@ -298,16 +297,40 @@ def _read_scene_graph_annotations_keyed_by_image_id(scene_graph_pkl_file,
           'object': obj,
           'object_box': triple['object_box'],
       })
-
-      # Caption graph.
-      cg_sub_ent_ids.append(
-          _insert_entity(cg_ent_names, cg_ent_boxes, triple['subject_box'],
-                         sub))
-      cg_obj_ent_ids.append(
-          _insert_entity(cg_ent_names, cg_ent_boxes, triple['object_box'], obj))
-      cg_rel_names.append(pred)
-
     sg_n_relation = len(sg_pred_names)
+
+    # Caption graph data (cg_*).
+    data_dict_list = []
+    captions = id_to_textgraph[image_id]['captions']
+
+    for sg in id_to_textgraph[image_id]['scene_graphs']:
+      entities, relations = sg['entities'], sg['relations']
+
+      # Entities.
+      nodes = []
+      for e in entities:
+        att_str = ','.join([
+            x['span']
+            for x in e['modifiers']
+            if x['dep'] not in ['det', 'nummod']
+        ])
+        nodes.append(e['head'] + (':' + att_str if att_str else ''))
+
+      # Edges.
+      senders, receivers, edges = [], [], []
+      for r in relations:
+        senders.append(r['subject'])
+        receivers.append(r['object'])
+        edges.append(r['relation'])
+
+      data_dict_list.append({
+          "nodes": nodes,
+          "edges": edges,
+          "senders": senders,
+          "receivers": receivers
+      })
+
+    graphs_tuple = utils_np.data_dicts_to_graphs_tuple(data_dict_list)
     data[image_id] = {
         'scene_graph': {
             'n_relation':
@@ -324,13 +347,13 @@ def _read_scene_graph_annotations_keyed_by_image_id(scene_graph_pkl_file,
                 sg_pred_names
         },
         'caption_graph': {
-            'caption': '',
-            'n_node': len(cg_ent_names),
-            'n_edge': len(cg_rel_names),
-            'nodes': cg_ent_names,
-            'edges': cg_rel_names,
-            'senders': cg_sub_ent_ids,
-            'receivers': cg_obj_ent_ids,
+            'caption': captions,
+            'n_node': graphs_tuple.n_node,
+            'n_edge': graphs_tuple.n_edge,
+            'nodes': graphs_tuple.nodes,
+            'edges': graphs_tuple.edges,
+            'senders': graphs_tuple.senders,
+            'receivers': graphs_tuple.receivers,
         }
     }
 
@@ -381,8 +404,9 @@ def main(_):
   # logging.info('Proposals: #=%i', len(id_to_proposals))
 
   # Load scene graphs.
+  id_to_textgraph = _read_text_graphs(FLAGS.text_graphs_json_file)
   id_to_scenegraph = _read_scene_graph_annotations_keyed_by_image_id(
-      FLAGS.scene_graph_pkl_file, scene_graph_meta)
+      FLAGS.scene_graph_pkl_file, scene_graph_meta, id_to_textgraph)
 
   # Generate tfrecord files.
   _create_tf_record_from_annotations(
@@ -396,6 +420,15 @@ def main(_):
       os.path.join(output_directory, 'test.tfrecord'), 1)
 
   logging.info('Done')
+
+def _read_text_graphs(file_name):
+  with tf.io.gfile.GFile(file_name, 'rb') as f:
+    annots = json.load(f)
+  data = {}
+  for annot in annots :
+    data[annot['image_id']] = annot
+  logging.info('Load %i text graphs examples.', len(data))
+  return data
 
 
 if __name__ == '__main__':

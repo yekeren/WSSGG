@@ -283,12 +283,13 @@ def _evaluate(pipeline_proto, model_dir):
                      steps=eval_config.steps)
 
 
-def _test(pipeline_proto, model_dir):
+def _test(pipeline_proto, model_dir, testing_res_file):
   """Starts to test.
 
   Args:
     pipeline_proto: An instance of pipeline_pb2.Pipeline.
     model_dir: Path to the directory saving checkpoint files.
+    testing_res_file: Path to the output result file.
   """
   # Create eval_spec.
   eval_input_fn = reader.get_input_fn(pipeline_proto.test_reader,
@@ -312,8 +313,7 @@ def _test(pipeline_proto, model_dir):
       checkpoint_number = max(int(m.group(1)), checkpoint_number)
 
   if checkpoint_number > 0:
-    testing_result_csv_file = os.path.join(checkpoint_dir,
-                                           'testing_result_file.csv')
+    testing_result_csv_file = os.path.join(checkpoint_dir, testing_res_file)
 
     # Do not re-evaluate if previous testing result is found.
     if os.path.isfile(testing_result_csv_file):
@@ -328,7 +328,7 @@ def _test(pipeline_proto, model_dir):
 
       metrics = estimator.evaluate(eval_input_fn,
                                    checkpoint_path=checkpoint_path,
-                                   steps=30000)
+                                   steps=40000)
       keys = [
           key for key in sorted(metrics.keys()) if key.startswith('metrics')
       ]
@@ -339,7 +339,10 @@ def _test(pipeline_proto, model_dir):
                    testing_result_csv_file)
 
 
-def evaluate(pipeline_proto, model_dir, testing=False):
+def evaluate(pipeline_proto,
+             model_dir,
+             testing=False,
+             testing_res_file="testing_result_file.csv"):
   """Starts a evaluation.
 
   Args:
@@ -352,7 +355,7 @@ def evaluate(pipeline_proto, model_dir, testing=False):
   if not testing:
     return _evaluate(pipeline_proto, model_dir)
 
-  return _test(pipeline_proto, model_dir)
+  return _test(pipeline_proto, model_dir, testing_res_file)
 
 
 def predict(pipeline_proto,
@@ -390,6 +393,9 @@ def predict(pipeline_proto,
   # Predict results.
   checkpoint_path = tf.train.latest_checkpoint(model_dir)
   assert checkpoint_path is not None
+
+  logging.info('Loading checkpoint %s...', checkpoint_path)
+  print('Loading checkpoint %s...' % checkpoint_path)
   for example in estimator.predict(input_fn=predict_input_fn,
                                    checkpoint_path=checkpoint_path,
                                    yield_single_examples=yield_single_examples):

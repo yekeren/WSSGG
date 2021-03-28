@@ -109,8 +109,8 @@ class Cap2SG(model_base.ModelBase):
                                          reuse=True)
       refined_relation = dt.refined_relation
 
-    for k, v in vars(dt).items():
-      print(k, v)
+    # for k, v in vars(dt).items():
+    #   print(k, v)
 
     predictions = {
         'grounding/entity/proposal_box':
