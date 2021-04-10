@@ -1,13 +1,26 @@
 # WSSGG
 
+* [0 Overview](#0-Overview)
 * [1 Installation](#1-installation)
     - [1.1 Faster-RCNN](#11-faster-rcnn)
     - [1.2 Language Parser](#12-language-parser)
-* [2 Settings)(#2-settings)
+* [2 Settings](#2-settings)
     - [2.1 VG-Gt-Graph](#21-vg-gt-graph)
     - [2.2 VG-Cap-Graph](#22-vg-cap-graph)
     - [2.3 COCO-Cap-Graph](#23-coco-cap-graph)
 * [3 Training and Evaluation](#training)
+* [4 Visualization](#visualization)
+
+## 0 Overview
+Our model uses the image's paired caption as weak supervision to learn the entities in the image and the relations among them.
+At inference time, it generates scene graphs without help from texts.
+To learn our model, we first allow context information to propagate on the text graph to enrich the entity word embeddings (Sec. 3.1). 
+We found this enrichment provides better localization of the visual objects.
+Then, we optimize a text-query-guided attention model (Sec. 3.2) to provide the image-level entity prediction and associate the text entities with visual regions best describing them.
+We use the joint probability to choose boxes associated with both subject and object (Sec. 3.3), then use the top scoring boxes to learn better grounding (Sec. 3.4).
+Finally, we use an RNN (Sec. 3.5) to capture the vision-language common-sense and refine our predictions.
+
+<img src="g3doc/images/overview.png">
 
 ## 1 Installation
 
@@ -58,4 +71,4 @@ ln -s "SceneGraphParser/sng_parser"
 
 ## 3 Training and Evaluation
 
-
+## 4 Visualization
