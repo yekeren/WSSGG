@@ -2,6 +2,7 @@
 
 * [1. Installation](#1-installation)
     - [1.1 Faster-RCNN](#11-faster-rcnn)
+    - [1.2 Language Parser](*12-language-parser)
 * [Preparing datasets](#preparing-datasets)
     - [Set up the text parser from Stanford Scene Graph Parser](#setup-the-text-parser-from-stanford-scene-graph-parser)
     - [Set up experimental data following VSPNet](#set-up-experimental-data-following-vspnet)
@@ -40,12 +41,12 @@ tar xzvf zoo/faster_rcnn_inception_resnet_v2_atrous_lowproposals_oid_2018_01_28.
 
 ### 1.2 Language Parser
 Though we indicate the dependency on spacy in [requirements.txt](requirements.txt), we still need to run ```python -m spacy download en''' for English.
-Then, we checkout the source at [SceneGraphParser](https://github.com/vacancy/SceneGraphParser) by running ```git clone "https://github.com/vacancy/SceneGraphParser.git" && ln -s "SceneGraphParser/sng_parser"'''
+Then, we checkout the tool at [SceneGraphParser](https://github.com/vacancy/SceneGraphParser) by running ```git clone "https://github.com/vacancy/SceneGraphParser.git" && ln -s "SceneGraphParser/sng_parser"'''
+
 ```
 python -m spacy download en
 git clone "https://github.com/vacancy/SceneGraphParser.git"
 ln -s "SceneGraphParser/sng_parser"
-
 ```
 
 ## Preparing datasets
