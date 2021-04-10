@@ -18,18 +18,10 @@ from __future__ import division
 from __future__ import print_function
 
 from protos import reader_pb2
-from readers import coco_reader
-from readers import scene_graph_reader
 from readers import caption_graph_reader
-from readers import scene_graph_pseudo_graph_reader
-from readers import scene_graph_text_graph_reader
 
 _READERS = {
-    'coco_reader': coco_reader,
     'caption_graph_reader': caption_graph_reader,
-    'scene_graph_reader': scene_graph_reader,
-    'scene_graph_pseudo_graph_reader': scene_graph_pseudo_graph_reader,
-    'scene_graph_text_graph_reader': scene_graph_text_graph_reader,
 }
 
 

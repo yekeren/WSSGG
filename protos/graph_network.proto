@@ -51,4 +51,8 @@ message MessagePassing {
   optional uint32 hidden_size = 8 [default = 50];
 
   optional float attn_scale = 9 [default = 1.0];
+
+  optional float attn_dropout_keep_prob = 11 [default = 1.0];
+
+  optional float rnn_dropout_keep_prob = 12 [default = 1.0];
 }

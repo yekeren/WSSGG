@@ -105,6 +105,7 @@ message WSSceneGraphRnnRefine {
   oneof proposasl_network_oneof {
     WSSceneGraphGNet ws_scene_graph_gnet = 1;
     WSSceneGraphCaptionGNet ws_scene_graph_caption_gnet = 2;
+    WSSGGenLing ws_sggen_ling = 3;
   }
 
   // Number of RNN layers to use.
@@ -140,6 +141,97 @@ message WSSceneGraphRnnRefine {
   // Relation feature type.
   optional RelationFeatureType relation_feature_type = 45 [default = POINTWISE_ADD];
 }
+message WSSGGenLing {
+  extend Model {
+    optional WSSGGenLing ext = 1013;
+  }
+
+  optional string glove_vocab_file = 51;
+
+  optional string glove_embedding_file = 52;
+
+  // Meta file containing the token to id mapping.
+  optional string token_to_id_meta_file = 1;
+
+  // Entity embedding file, data shape=[1 + #entities, dims].
+  optional string entity_emb_npy_file = 2;
+
+  // Predicate embedding file, data shape=[1 + #predicates, dims].
+  optional string predicate_emb_npy_file = 3;
+
+  // Keep probability of dropout layers.
+  optional float dropout_keep_prob = 4 [default = 1.0];
+
+  // Keep probability of attention dropout layers.
+  optional float attn_dropout_keep_prob = 5 [default = 1.0];
+
+  // Scale factor of attention.
+  optional float attn_scale = 10 [default = 1.0];
+
+  // Hyperparameters for the fully-connected layers.
+  optional Hyperparams fc_hyperparams = 6;
+
+  // Entity: number of hidden units.
+  optional uint32 entity_hidden_units = 7 [default = 300];
+
+  // Relation: number of hidden units.
+  optional uint32 relation_hidden_units = 8 [default = 10];
+
+  // IoU threshold to compute metrics.
+  optional float iou_threshold = 9 [default = 0.5];
+
+  // Edge scoring method.
+  optional EdgeScoring edge_scoring = 15 [default = ATTENTION_x_CLASSIFICATION];
+
+  // Post processing.
+  optional PostProcess post_process = 16;
+
+  // IoU threshold to propogate annotations.
+  optional float iou_threshold_to_propogate = 17 [default = 0.5];
+
+  // IoU threshold to propogate annotations.
+  optional float iou_threshold_to_propogate_relation = 19 [default = 0.5];
+
+  // Refine iterations.
+  optional uint32 n_refine_iteration = 18 [default = 1];
+
+  // If true, the refine process uses sigmoid prediction.
+  optional bool refine_use_softmax = 24 [default = false];
+
+  // Weight of the MED loss.
+  optional float multiple_entity_detection_loss_weight = 20 [default = 1.0];
+
+  // Weight of the refine loss.
+  optional float proposal_refine_loss_weight = 23 [default = 1.0];
+
+  // Weight of the refine loss.
+  optional float relation_refine_loss_weight = 28 [default = 1.0];
+
+  // If true, use spatial features.
+  optional bool use_spatial_feature = 29 [default = false];
+
+  // Weight of the proposal-proposal relation edge.
+  optional float joint_inferring_relation_weight = 32;
+
+  // Dropout keep probability for the relation edges.
+  optional float mps_relation_dropout_keep_prob = 33 [default = 1.0];
+
+  // If true, use log probability.
+  optional bool use_log_prob = 34 [default = false];
+
+  // Configuation of the graph network.
+  optional GraphNetwork text_graph_network = 42;
+
+  // Sage steps, the (i+1) th refinement will starts `sage_steps` later than the (i) th refinement.
+  optional uint32 sage_steps = 43 [default = 0];
+
+  // If true, make the graph initial embedding trainable.
+  optional bool train_graph_initial_embedding = 44 [default = false];
+
+  // If set, the max-norm of the graph initial embedding.
+  optional float graph_initial_embedding_max_norm = 45;
+}
+
 
 message WSSceneGraphGNet {
   extend Model {
@@ -234,7 +326,7 @@ message WSSceneGraphGNet {
 
 message WSSceneGraphCaptionGNet {
   extend Model {
-    optional WSSceneGraphCaptionGNet ext = 1013;
+    optional WSSceneGraphCaptionGNet ext = 1014;
   }
 
   optional string glove_vocab_file = 51;
@@ -321,5 +413,242 @@ message WSSceneGraphCaptionGNet {
 
   // If set, the max-norm of the graph initial embedding.
   optional float graph_initial_embedding_max_norm = 45;
+}
+
+message WSSceneGraphRnnRefineV2 {
+  extend Model {
+    optional WSSceneGraphRnnRefineV2 ext = 1072;
+  }
+
+  oneof proposasl_network_oneof {
+    WSSceneGraphGNet ws_scene_graph_gnet = 1;
+    WSSceneGraphCaptionGNet ws_scene_graph_caption_gnet = 2;
+    WSSGGenLing ws_sggen_ling = 3;
+  }
+
+  // Number of RNN layers to use.
+  optional uint32 rnn_layers = 34 [default = 1];
+
+  // Number of RNN hidden units.
+  optional uint32 rnn_hidden_units = 35 [default = 50];
+
+  // Keep probability of RNN inputs.
+  optional float rnn_input_keep_prob = 36 [default = 1.0];
+
+  // Keep probability of RNN outputs.
+  optional float rnn_output_keep_prob = 37 [default = 1.0];
+
+  // Keep probability of RNN states.
+  optional float rnn_state_keep_prob = 38 [default = 1.0];
+
+  // Beam size for searching the solution.
+  optional uint32 beam_size = 39 [default = 5];
+
+  // Maximum triples to retain.
+  optional uint32 max_total_size = 40 [default = 100];
+
+  // If true, use transformer to contextualize triple features.
+  optional bool use_transformer = 42 [default = false];
+
+  // Number of Transformer layers.
+  optional uint32 transformer_layers = 43 [default = 1];
+
+  // Dropout probability of the Transformer attention layers.
+  optional float transformer_attn_dropout_prob = 44 [default = 0.0];
+
+  // Relation feature type.
+  optional RelationFeatureType relation_feature_type = 45 [default = POINTWISE_ADD];
+}
+
+enum BiasMode {
+  BIAS_MODE_ZERO = 1;
+  BIAS_MODE_TRADITION = 2;
+  BIAS_MODE_TRAIN_FROM_EMBEDDING = 3;
+}
+
+enum LossType {
+  LOSS_TYPE_SOFTMAX_CROSSENTROPY = 1;
+  LOSS_TYPE_SIGMOID_CROSSENTROPY = 2;
+  LOSS_TYPE_FOCAL_SIGMOID_CROSSENTROPY = 3;
+}
+
+enum DetectionFeatureType {
+  DET_FEATURE_DEFAULT = 1;
+  DET_FEATURE_CNN = 2;
+  DET_FEATURE_ADD_ATTRIBUTE = 3;
+}
+
+enum RelationScoringMethod {
+  REL_LANGUAGE_SCORE_ONLY = 1;
+  REL_RANKING_SCORE_ONLY = 2;
+  REL_MIXED_SCORE = 3;
+}
+
+message ContextualizationConfig {
+  // Number of hidden layers.
+  optional uint32 num_hidden_layers = 1 [default = 1];
+
+  // Number of attention heads.
+  optional uint32 num_attention_heads = 2 [default = 1];
+
+  // Size of the intermediate layer.
+  optional uint32 intermediate_size = 3 [default = 300];
+}
+
+message Transformer {
+  // Nubmer of hidden layers.
+  optional uint32 num_hidden_layers = 2 [default = 1];
+
+  // Number of attention heads.
+  optional uint32 num_attention_heads = 3 [default = 1];
+
+  // Size of the intermediate layer.
+  optional uint32 intermediate_size = 4 [default = 300];
+
+  // Attention dropout rate.
+  optional float attention_probs_dropout_prob = 5 [default = 0.0];
+
+  // Hidden dropout rate.
+  optional float hidden_dropout_prob = 6 [default = 0.0];
+}
+
+message Cap2SG{
+  extend Model {
+    optional Cap2SG ext = 2024;
+  }
+  
+  // Preprocess options.
+  optional Cap2SGPreprocess preprocess_options = 1;
+  optional Cap2SGLinguistic linguistic_options = 33;
+  optional Cap2SGGrounding grounding_options = 2;
+  optional Cap2SGDetection detection_options = 3;
+  optional Cap2SGRelation relation_options = 4;
+  optional Cap2SGCommonSense common_sense_options = 5;
+
+  optional bool parse_attribute_in_training = 6 [default = true];
+  optional bool parse_attribute_in_evaluation = 7 [default = true];
+
+  optional float weight_decay = 8 [default = 1e-6];
+  optional float dropout_keep_prob = 9 [default = 1.0];
+
+  optional uint32 hidden_units = 12 [default = 300];
+
+  // If true, use self-attention.
+  optional Transformer transformer_config = 13;
+
+  optional bool common_sense_refine = 14 [default = false];
+}
+
+message Cap2SGLinguistic {
+  // Configuation of the graph network.
+  optional float weight_decay = 41 [default = 1e-6];
+  optional GraphNetwork graph_network = 42;
+}
+
+message Cap2SGPreprocess {
+  // Vocabulary file.
+  optional string vocabulary_file = 1;
+
+  // Closed vocabulary file.
+  optional string closed_vocabulary_file = 2;
+
+  // Minimum frequency to incorporate the word in the vocabulary.
+  optional uint32 minimum_frequency = 3 [default = 20];
+
+  // Dimensions of the word embedding vectors.
+  optional uint32 embedding_dims = 4 [default = 300];
+
+  // If true, train the word embedding vectors.
+  optional bool embedding_trainable = 5 [default = false];
+
+  // GloVe word tokens.
+  optional string glove_vocabulary_file = 6;
+
+  // GloVe word embeddings for initializing the word embedding vectors.
+  optional string glove_embedding_file = 7;
+
+  // Mode for computing the bias.
+  optional BiasMode bias_mode = 12 [default = BIAS_MODE_ZERO];
+}
+
+message Cap2SGGrounding {
+  extend Model {
+    optional Cap2SGGrounding ext = 1023;
+  }
+
+  // Grounding loss weight.
+  optional float loss_weight = 1 [default = 1.0];
+
+  optional float midn_attention_dropout_keep_prob = 8 [default = 1.0];
+
+  optional bool two_branches = 9 [default = false];
+}
+
+message Cap2SGDetection {
+  extend Model {
+    optional Cap2SGDetection ext = 1021;
+  }
+
+  // Detection loss weight.
+  optional float loss_weight = 1 [default = 1.0];
+
+  // Post processing config.
+  optional PostProcess post_process = 2;
+
+  // If true, override the grounding output. Required for iterative refinement.
+  optional bool override_grounding_result = 3 [default = true];
+
+  // Detection feature type.
+  optional DetectionFeatureType detection_feature_type = 4 [default = DET_FEATURE_ADD_ATTRIBUTE];
+
+  // Number of refining iterations.
+  optional uint32 num_iterations = 5 [default = 1];
+
+  optional float grounding_iou_threshold = 6 [default = 0.7];
+
+  optional bool used_detection_head_as_rnn_vis_feature = 13 [default = false];
+
+  optional bool predict_attributes = 14 [default = false];
+}
+
+message Cap2SGRelation {
+  extend Model {
+    optional Cap2SGRelation ext = 1024;
+  }
+
+  // Relation loss weight.
+  optional float loss_weight = 1 [default = 1.0];
+
+  optional uint32 relation_max_total_size = 2 [default = 100];
+  optional uint32 relation_max_size_per_class = 3 [default = 5];
+  optional float relation_threshold = 4 [default = 0.0];
+
+  optional float grounding_iou_threshold = 6 [default = 0.7];
+}
+
+message Cap2SGCommonSense {
+  extend Model {
+    optional Cap2SGCommonSense ext = 3024;
+  }
+
+  // Relation loss weight.
+  optional float loss_weight = 1 [default = 1.0];
+  optional float triple_loss_weight = 7 [default = 1.0];
+
+  optional uint32 beam_size = 6 [default = 5];
+
+  optional uint32 relation_max_total_size = 2 [default = 100];
+
+  optional float rnn_output_keep_prob = 3 [default = 1.0];
+  optional float rnn_input_keep_prob = 4 [default = 1.0];
+  optional float rnn_state_keep_prob = 5 [default = 1.0];
+
+  optional bool update_gradients = 8 [default = true];
+
+  optional uint32 rnn_hidden_units = 11 [default = 300];
+
+  optional RelationScoringMethod relation_scoring_method = 12 [default = REL_LANGUAGE_SCORE_ONLY];
+
+  optional float ranking_score_weight = 13 [default = 0.2];
 }
 

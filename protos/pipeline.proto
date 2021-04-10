@@ -23,6 +23,9 @@ message Pipeline {
 
   // Eval config
   optional EvalConfig eval_config = 6;
+
+  // Random seed.
+  optional float seed = 7 [default = 0.0];
 }
 
 message EvalConfig {
