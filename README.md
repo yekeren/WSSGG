@@ -1,7 +1,7 @@
 # WSSGG
 
-* [1. Installation](#installation)
-    - [1.1 Faster-RCNN](#faster-RCNN)
+* [1. Installation](#1-installation)
+    - [1.1 Faster-RCNN](#11-faster-rcnn)
 * [Preparing datasets](#preparing-datasets)
     - [Set up the text parser from Stanford Scene Graph Parser](#setup-the-text-parser-from-stanford-scene-graph-parser)
     - [Set up experimental data following VSPNet](#set-up-experimental-data-following-vspnet)
@@ -14,11 +14,12 @@
 We use Tensorflow 1.5 and Python 3.6.4. To continue, please ensure that at least the correct Python version is installed.
 [requirements.txt](requirements.txt) defines the list of python packages we installed.
 Simply run ```pip install -r requirements.txt``` to install these packages after setting up python.
+Next, run ```protoc protos/*.proto --python_out=.``` to compile the required protobuf protocol files, which are used for storing configurations.
 
 ### 1.1 Faster-RCNN
 Our Faster-RCNN implementation relies on the [Tensorflow object detection API](https://github.com/tensorflow/models/tree/master/research/object_detection).
 Users can use ```git clone "https://github.com/tensorflow/models.git" "tensorflow_models" && ln -s "tensorflow_models/research/object_detection" ``` to set up.
-Next, run ```protoc protos/*.proto --python_out=.``` to compile the required protobuf protocol files, using for storing configurations.
+The specific model we use is [faster_rcnn_inception_resnet_v2_atrous_lowproposals_oidv2](http://download.tensorflow.org/models/object_detection/faster_rcnn_inception_resnet_v2_atrous_lowproposals_oid_2018_01_28.tar.gz) to keep it the same as the VSPNet. More available models are listed in [Tensorflow object detection zoo](https://github.com/tensorflow/models/blob/master/research/object_detection/g3doc/tf1_detection_zoo.md).
 
 ## Preparing datasets
 
