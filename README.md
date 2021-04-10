@@ -1,6 +1,7 @@
 # WSSGG
 
-* [Preparing code base](#preparing-code-base)
+* [1. Installation](#1-installation)
+    - [1.1 Faster-RCNN](#11-faster-rcnn)
 * [Preparing datasets](#preparing-datasets)
     - [Set up the text parser from Stanford Scene Graph Parser](#setup-the-text-parser-from-stanford-scene-graph-parser)
     - [Set up experimental data following VSPNet](#set-up-experimental-data-following-vspnet)
@@ -8,24 +9,33 @@
 * [Training](#training)
 * [Evaluation](#evaluation)
 
-## Preparing code base
-
-We use Tensorflow 1.5 and Python 3.6.4. A list of python package installed can be found in the [requirements.txt](requirements.txt). Simply, run the following command to install packages after setting up python.
+## 1. Installation
 
 ```
-pip install -r "requirements.txt"
+git clone "https://github.com/yekeren/WSSGG.git" && cd "WSSGG"
 ```
 
-Our Fast-RCNN implementation relies on the [Tensorflow object detection API](https://github.com/tensorflow/models/tree/master/research/object_detection). So, run the following command to clone their repository.
+We use Tensorflow 1.5 and Python 3.6.4. To continue, please ensure that at least the correct Python version is installed.
+[requirements.txt](requirements.txt) defines the list of python packages we installed.
+Simply run ```pip install -r requirements.txt``` to install these packages after setting up python.
+Next, run ```protoc protos/*.proto --python_out=.``` to compile the required protobuf protocol files, which are used for storing configurations.
 
 ```
-sh prepare.sh
+pip install -r requirements.txt
+protoc protos/*.proto --python_out=.
 ```
 
-Then, we need to compile the .proto files. Our program uses .proto files to store configurations.
+### 1.1 Faster-RCNN
+Our Faster-RCNN implementation relies on the [Tensorflow object detection API](https://github.com/tensorflow/models/tree/master/research/object_detection).
+Users can use ```git clone "https://github.com/tensorflow/models.git" "tensorflow_models" && ln -s "tensorflow_models/research/object_detection" ``` to set up.
+The specific model we use is [faster_rcnn_inception_resnet_v2_atrous_lowproposals_oidv2](http://download.tensorflow.org/models/object_detection/faster_rcnn_inception_resnet_v2_atrous_lowproposals_oid_2018_01_28.tar.gz) to keep it the same as the VSPNet. More information is in [Tensorflow object detection zoo](https://github.com/tensorflow/models/blob/master/research/object_detection/g3doc/tf1_detection_zoo.md).
 
 ```
-sh build.sh
+git clone "https://github.com/tensorflow/models.git" "tensorflow_models" 
+ln -s "tensorflow_models/research/object_detection"
+mkdir -p "zoo"
+wget -P "zoo" "http://download.tensorflow.org/models/object_detection/faster_rcnn_inception_resnet_v2_atrous_lowproposals_oid_2018_01_28.tar.gz"
+tar xzvf zoo/faster_rcnn_inception_resnet_v2_atrous_lowproposals_oid_2018_01_28.tar.gz -C "zoo"
 ```
 
 ## Preparing datasets
