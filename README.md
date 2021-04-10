@@ -30,6 +30,14 @@ Our Faster-RCNN implementation relies on the [Tensorflow object detection API](h
 Users can use ```git clone "https://github.com/tensorflow/models.git" "tensorflow_models" && ln -s "tensorflow_models/research/object_detection" ``` to set up.
 The specific model we use is [faster_rcnn_inception_resnet_v2_atrous_lowproposals_oidv2](http://download.tensorflow.org/models/object_detection/faster_rcnn_inception_resnet_v2_atrous_lowproposals_oid_2018_01_28.tar.gz) to keep it the same as the VSPNet. More information is in [Tensorflow object detection zoo](https://github.com/tensorflow/models/blob/master/research/object_detection/g3doc/tf1_detection_zoo.md).
 
+```
+git clone "https://github.com/tensorflow/models.git" "tensorflow_models" 
+ln -s "tensorflow_models/research/object_detection"
+mkdir -p "zoo"
+wget -P "zoo" "http://download.tensorflow.org/models/object_detection/faster_rcnn_inception_resnet_v2_atrous_lowproposals_oid_2018_01_28.tar.gz"
+tar xzvf zoo/faster_rcnn_inception_resnet_v2_atrous_lowproposals_oid_2018_01_28.tar.gz -C "zoo"
+```
+
 ## Preparing datasets
 
 ### Setup the text parser from [Stanford Scene Graph Parser](https://nlp.stanford.edu/software/scenegraph-parser.shtml)
