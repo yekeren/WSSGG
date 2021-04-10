@@ -173,8 +173,6 @@ def main(_):
     tf.gfile.MakeDirs(os.path.join(FLAGS.output_directory, str(i)))
 
   _create_frcnn_proposals_nparray(FLAGS.image_dir)
-  # _create_frcnn_proposals_nparray(FLAGS.val_image_file)
-  # _create_frcnn_proposals_nparray(FLAGS.test_image_file)
 
 
 if __name__ == '__main__':
