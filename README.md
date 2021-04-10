@@ -1,15 +1,15 @@
 # WSSGG
 
-* [1. Installation](#1-installation)
+* [1 Installation](#1-installation)
     - [1.1 Faster-RCNN](#11-faster-rcnn)
-* [Preparing datasets](#preparing-datasets)
-    - [Set up the text parser from Stanford Scene Graph Parser](#setup-the-text-parser-from-stanford-scene-graph-parser)
-    - [Set up experimental data following VSPNet](#set-up-experimental-data-following-vspnet)
-    - [Set up experimental data of COCO captions](#set-up-experimental-data-of-coco-captions)
-* [Training](#training)
-* [Evaluation](#evaluation)
+    - [1.2 Language Parser](#12-language-parser)
+* [2 Settings)(#2-settings)
+    - [2.1 VG-Gt-Graph](#21-vg-gt-graph)
+    - [2.2 VG-Cap-Graph](#22-vg-cap-graph)
+    - [2.3 COCO-Cap-Graph](#23-coco-cap-graph)
+* [3 Training and Evaluation](#training)
 
-## 1. Installation
+## 1 Installation
 
 ```
 git clone "https://github.com/yekeren/WSSGG.git" && cd "WSSGG"
@@ -40,56 +40,22 @@ tar xzvf zoo/faster_rcnn_inception_resnet_v2_atrous_lowproposals_oid_2018_01_28.
 
 ### 1.2 Language Parser
 Though we indicate the dependency on spacy in [requirements.txt](requirements.txt), we still need to run ```python -m spacy download en''' for English.
-Then, we checkout the source at [SceneGraphParser](https://github.com/vacancy/SceneGraphParser) by running ```git clone "https://github.com/vacancy/SceneGraphParser.git" && ln -s "SceneGraphParser/sng_parser"'''
+Then, we checkout the tool at [SceneGraphParser](https://github.com/vacancy/SceneGraphParser) by running ```git clone "https://github.com/vacancy/SceneGraphParser.git" && ln -s "SceneGraphParser/sng_parser"'''
+
 ```
 python -m spacy download en
 git clone "https://github.com/vacancy/SceneGraphParser.git"
 ln -s "SceneGraphParser/sng_parser"
-
 ```
 
-## Preparing datasets
+## 2 Settings
 
-### Setup the text parser from [Stanford Scene Graph Parser](https://nlp.stanford.edu/software/scenegraph-parser.shtml)
-We use schuster et al. 2015 to generate text scene graphs from captions. Thus, the first step is to set up the provided text parser. The following command shall download the text parser as well as dependancies from [Stanford Scene Graph Parser](https://nlp.stanford.edu/software/scenegraph-parser.shtml). It will create a "tools/stanford-corenlp-full-2015-12-09" folder and put any required files in it.
-```
-sh tools/download_scene_graph_parser.sh tools
+### 2.1 VG-Gt-Graph
 
-cd "tools/"
-javac -cp "stanford-corenlp-full-2015-12-09/*:." "SceneGraphDemo.java"
-java -mx2g -cp "stanford-corenlp-full-2015-12-09/*:." "SceneGraphDemo"
-```
-The above java commands will launch the examplar program, if you enter "both of the men are riding their horses" in the prompt java command line, the program will return:
-```
-(python) -bash-4.2$ java -mx2g -cp "stanford-corenlp-full-2015-12-09/*:." "SceneGraphDemo"
-Processing from stdin. Enter one sentence per line.
-> both of the men are riding their horses
-{"relationships":[{"predicate":"have","subject":0,"text":["man","have","horse"],"object":2},{"predicate":"ride","subject":0,"text":["man","ride","horse"],"object":2},{"predicate":"have","subject":1,"text":["man","have","horse"],"object":3},{"predicate":"ride","subject":1,"text":["man","ride","horse"],"object":3}],"phrase":"both of the men are riding their horses","objects":[{"names":["man"]},{"names":["man"]},{"names":["horse"]},{"names":["horse"]}],"attributes":[],"id":0,"url":""}
-```
+### 2.2 VG-Cap-Graph
 
-### Extract text graphs from the VG captions
-We use the following command to extract text graphs from the VG region descriptions. It'll download the region descriptions from the VG dataset and run schuster's parser.
-```
-sh tools/download_and_preprocess_vg_captions.sh data-vspnet/text_graphs
-```
+### 2.3 COCO-Cap-Graph
 
-###  Set up experimental data following [VSPNet](https://github.com/alirezazareian/vspnet)
-We provide scripts and tools to set up experiments identical to the Zareian et al., CVPR2020. We download proposal boxes, box features, and preprocessed data annotation splits from their git repository. For more information, please refer to [their repository](https://github.com/alirezazareian/vspnet).
+## 3 Training and Evaluation
 
-The following scripts shall download the data needed and generate .tfrecord files under the "./data-vspnet/tfrecords" directory.
 
-```
-sh download_and_prepare_vspnet_experiments.sh "data-vspnet"
-```
-
-### Set up experimental data of COCO captions
-
-```
-sh "tools/download_and_preprocess_mscoco.sh" "data-mcoco"
-```
-
-## Training
-
-## Evaluation
-
-it is changed.
