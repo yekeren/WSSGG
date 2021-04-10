@@ -11,10 +11,19 @@
 
 ## 1. Installation
 
+```
+git clone "https://github.com/yekeren/WSSGG.git" && cd "WSSGG"
+```
+
 We use Tensorflow 1.5 and Python 3.6.4. To continue, please ensure that at least the correct Python version is installed.
 [requirements.txt](requirements.txt) defines the list of python packages we installed.
 Simply run ```pip install -r requirements.txt``` to install these packages after setting up python.
 Next, run ```protoc protos/*.proto --python_out=.``` to compile the required protobuf protocol files, which are used for storing configurations.
+
+```
+pip install -r requirements.txt
+protoc protos/*.proto --python_out=.
+```
 
 ### 1.1 Faster-RCNN
 Our Faster-RCNN implementation relies on the [Tensorflow object detection API](https://github.com/tensorflow/models/tree/master/research/object_detection).
