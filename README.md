@@ -5,9 +5,8 @@
     - [1.1 Faster-RCNN](#11-faster-rcnn)
     - [1.2 Language Parser](#12-language-parser)
 * [2 Settings](#2-settings)
-    - [2.1 VG-Gt-Graph](#21-vg-gt-graph)
-    - [2.2 VG-Cap-Graph](#22-vg-cap-graph)
-    - [2.3 COCO-Cap-Graph](#23-coco-cap-graph)
+    - [2.1 VG-Gt-Graph and VG-Cap-Graph](#21-vg-gt-graph-and-vg-cap-graph)
+    - [2.2 COCO-Cap-Graph](#22-coco-cap-graph)
 * [3 Training and Evaluation](#training)
 * [4 Visualization](#visualization)
 
@@ -41,11 +40,15 @@ protoc protos/*.proto --python_out=.
 ### 1.1 Faster-RCNN
 Our Faster-RCNN implementation relies on the [Tensorflow object detection API](https://github.com/tensorflow/models/tree/master/research/object_detection).
 Users can use ```git clone "https://github.com/tensorflow/models.git" "tensorflow_models" && ln -s "tensorflow_models/research/object_detection" ``` to set up.
-The specific model we use is [faster_rcnn_inception_resnet_v2_atrous_lowproposals_oidv2](http://download.tensorflow.org/models/object_detection/faster_rcnn_inception_resnet_v2_atrous_lowproposals_oid_2018_01_28.tar.gz) to keep it the same as the [VSPNet](https://github.com/alirezazareian/vspnet). More information is in [Tensorflow object detection zoo](https://github.com/tensorflow/models/blob/master/research/object_detection/g3doc/tf1_detection_zoo.md).
+Also, don't forget to using ```protoc``` to compire the protos used by the detection API.
+
+The specific Faster-RCNN model we use is [faster_rcnn_inception_resnet_v2_atrous_lowproposals_oidv2](http://download.tensorflow.org/models/object_detection/faster_rcnn_inception_resnet_v2_atrous_lowproposals_oid_2018_01_28.tar.gz) to keep it the same as the [VSPNet](https://github.com/alirezazareian/vspnet). More information is in [Tensorflow object detection zoo](https://github.com/tensorflow/models/blob/master/research/object_detection/g3doc/tf1_detection_zoo.md).
 
 ```
 git clone "https://github.com/tensorflow/models.git" "tensorflow_models" 
 ln -s "tensorflow_models/research/object_detection"
+cd tensorflow_models/research/; protoc object_detection/protos/*.proto --python_out=.; cd -
+
 mkdir -p "zoo"
 wget -P "zoo" "http://download.tensorflow.org/models/object_detection/faster_rcnn_inception_resnet_v2_atrous_lowproposals_oid_2018_01_28.tar.gz"
 tar xzvf zoo/faster_rcnn_inception_resnet_v2_atrous_lowproposals_oid_2018_01_28.tar.gz -C "zoo"
@@ -63,11 +66,19 @@ ln -s "SceneGraphParser/sng_parser"
 
 ## 2 Settings
 
-### 2.1 VG-Gt-Graph
+### 2.1 VG-Gt-Graph and VG-Cap-Graph
 
-### 2.2 VG-Cap-Graph
+Typing ```sh dataset-tools/create_vg_settings.sh "vg-gt-cap"``` will generate VG-related files under the folder "vg-gt-cap" (for both VG-Gt-Graph and VG-Cap-Graph settings). Basically, it will download datasets and launch the following programs under the [dataset-tools](dataset-tools) directory:
 
-### 2.3 COCO-Cap-Graph
+| Name                                                                       | Desc.                                         |
+|----------------------------------------------------------------------------|-----------------------------------------------|
+| [create_vg_frcnn_proposals.py](dataset-tools/create_vg_frcnn_proposals.py) | Extract VG visual proposals using Faster-RCNN |
+| [create_vg_text_graphs.py](dataset-tools/create_vg_text_graphs.py)         | Extract VG text graphs using Text Parser      |
+| [create_vg_vocabulary](dataset-tools/create_vg_vocabulary.py)              | Get the VG vocabulary                         |
+|                                                                            |                                               |
+
+
+### 2.2 COCO-Cap-Graph
 
 ## 3 Training and Evaluation
 
