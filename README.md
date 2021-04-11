@@ -7,7 +7,7 @@ README.md shall be finished soon.
     - [1.1 Faster-RCNN](#11-faster-rcnn)
     - [1.2 Language Parser](#12-language-parser)
 * [2 Settings](#2-settings)
-    - [2.1 VG-Gt-Graph and VG-Cap-Graph](#21-vg-gt-graph-and-vg-cap-graph)
+    - [2.1 VG-GT-Graph and VG-Cap-Graph](#21-vg-gt-graph-and-vg-cap-graph)
     - [2.2 COCO-Cap-Graph](#22-coco-cap-graph)
 * [3 Training and Evaluation](#training)
 * [4 Visualization](#visualization)
@@ -57,8 +57,8 @@ tar xzvf zoo/faster_rcnn_inception_resnet_v2_atrous_lowproposals_oid_2018_01_28.
 ```
 
 ### 1.2 Language Parser
-Though we indicate the dependency on spacy in [requirements.txt](requirements.txt), we still need to run ```python -m spacy download en''' for English.
-Then, we checkout the tool at [SceneGraphParser](https://github.com/vacancy/SceneGraphParser) by running ```git clone "https://github.com/vacancy/SceneGraphParser.git" && ln -s "SceneGraphParser/sng_parser"'''
+Though we indicate the dependency on spacy in [requirements.txt](requirements.txt), we still need to run ```python -m spacy download en``` for English.
+Then, we checkout the tool at [SceneGraphParser](https://github.com/vacancy/SceneGraphParser) by running ```git clone "https://github.com/vacancy/SceneGraphParser.git" && ln -s "SceneGraphParser/sng_parser"```
 
 ```
 python -m spacy download en
@@ -68,16 +68,17 @@ ln -s "SceneGraphParser/sng_parser"
 
 ## 2 Settings
 
-### 2.1 VG-Gt-Graph and VG-Cap-Graph
+### 2.1 VG-GT-Graph and VG-Cap-Graph
 
-Typing ```sh dataset-tools/create_vg_settings.sh "vg-gt-cap"``` will generate VG-related files under the folder "vg-gt-cap" (for both VG-Gt-Graph and VG-Cap-Graph settings). Basically, it will download datasets and launch the following programs under the [dataset-tools](dataset-tools) directory:
+Typing ```sh dataset-tools/create_vg_settings.sh "vg-gt-cap"``` will generate VG-related files under the folder "vg-gt-cap" (for both VG-GT-Graph and VG-Cap-Graph settings). Basically, it will download datasets and launch the following programs under the [dataset-tools](dataset-tools) directory:
 
-| Name                                                                       | Desc.                                         |
-|----------------------------------------------------------------------------|-----------------------------------------------|
-| [create_vg_frcnn_proposals.py](dataset-tools/create_vg_frcnn_proposals.py) | Extract VG visual proposals using Faster-RCNN |
-| [create_vg_text_graphs.py](dataset-tools/create_vg_text_graphs.py)         | Extract VG text graphs using Text Parser      |
-| [create_vg_vocabulary](dataset-tools/create_vg_vocabulary.py)              | Get the VG vocabulary                         |
-|                                                                            |                                               |
+| Name                                                                               | Desc.                                                 |
+|------------------------------------------------------------------------------------|-------------------------------------------------------|
+| [create_vg_frcnn_proposals.py](dataset-tools/create_vg_frcnn_proposals.py)         | Extract VG visual proposals using Faster-RCNN         |
+| [create_vg_text_graphs.py](dataset-tools/create_vg_text_graphs.py)                 | Extract VG text graphs using Language Parser          |
+| [create_vg_vocabulary](dataset-tools/create_vg_vocabulary.py)                      | Gather the VG vocabulary                              |
+| [create_vg_gt_graph_tf_record.py](dataset-tools/create_vg_gt_graph_tf_record.py)   | Generate TF record files for the VG-GT-Graph setting  |
+| [create_vg_cap_graph_tf_record.py](dataset-tools/create_vg_cap_graph_tf_record.py) | Generate TF record files for the VG-Cap-Graph setting |
 
 
 ### 2.2 COCO-Cap-Graph
