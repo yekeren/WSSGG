@@ -6,6 +6,7 @@ README.md shall be finished soon.
 * [1 Installation](#1-installation)
     - [1.1 Faster-RCNN](#11-faster-rcnn)
     - [1.2 Language Parser](#12-language-parser)
+    - [1.3 GloVe Embeddings](#13-glove-embeddings)
 * [2 Settings](#2-settings)
     - [2.1 VG-GT-Graph and VG-Cap-Graph](#21-vg-gt-graph-and-vg-cap-graph)
     - [2.2 COCO-Cap-Graph](#22-coco-cap-graph)
@@ -64,6 +65,19 @@ Then, we checkout the tool at [SceneGraphParser](https://github.com/vacancy/Scen
 python -m spacy download en
 git clone "https://github.com/vacancy/SceneGraphParser.git"
 ln -s "SceneGraphParser/sng_parser"
+```
+
+### 1.3 GloVe Embeddings
+We use the pre-trained 300-D GloVe embeddings.
+
+```
+wget -P "zoo" "http://nlp.stanford.edu/data/glove.6B.zip"
+unzip "zoo/glove.6B.zip" -d "zoo"
+
+python "dataset-tools/export_glove_words_and_embeddings.py" \
+  --glove_file "zoo/glove.6B.300d.txt" \
+  --output_vocabulary_file "zoo/glove_word_tokens.txt" \
+  --output_vocabulary_word_embedding_file "zoo/glove_word_vectors.npy"
 ```
 
 ## 2 Settings
