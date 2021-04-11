@@ -22,6 +22,10 @@ Then, we optimize a text-query-guided attention model (Sec. 3.2) to provide the 
 We use the joint probability to choose boxes associated with both subject and object (Sec. 3.3), then use the top scoring boxes to learn better grounding (Sec. 3.4).
 Finally, we use an RNN (Sec. 3.5) to capture the vision-language common-sense and refine our predictions.
 
+* We would later achieve the TF record files for training and evaluation (```3 Training and Evaluation```).
+   - Then, users could skip ```1 Installation``` and ```2 settings``` if they are not extending the work on other datasets.
+* We shall release our models.
+
 <img src="g3doc/images/overview.png">
 
 ## 1 Installation
