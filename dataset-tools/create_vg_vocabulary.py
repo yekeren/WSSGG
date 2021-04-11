@@ -52,7 +52,7 @@ def _create_vocabulary_from_annotations(scenegraph_annotations_file,
   """
   with tf.io.gfile.GFile(scenegraph_annotations_file, 'r') as fid:
     annots = json.load(fid)
-  logging.info('Original coco images: %i', len(annots))
+  logging.info('Original images: %i', len(annots))
 
   counter = collections.Counter()
   for i, annot in enumerate(annots):

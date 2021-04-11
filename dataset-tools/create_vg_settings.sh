@@ -55,6 +55,17 @@ if [ ! -d "${data_dir}/images" ]; then
 fi
 
 ################################################################################
+# Download visual genome region descriptions. 
+################################################################################
+if [ ! -f "${data_dir}/region_descriptions.json" ]; then
+  download \
+    "http://visualgenome.org/static/data/dataset/region_descriptions.json.zip" \
+    "${data_dir}" "region_descriptions.json.zip"
+
+  unzip -q "${data_dir}/region_descriptions.json.zip" -d "${data_dir}"
+fi
+
+################################################################################
 # Extract proposals using Faster-RCNN.
 ################################################################################
 if [ ! -d "${data_dir}/frcnn_proposals/" ]; then
@@ -66,52 +77,60 @@ if [ ! -d "${data_dir}/frcnn_proposals/" ]; then
     --detection_checkpoint_file="zoo/faster_rcnn_inception_resnet_v2_atrous_lowproposals_oid_2018_01_28/model.ckpt"
 fi
 
-exit 0
-
 
 ##########################################################
-# Create the tfrecord files.
+# Extract the text graphs and gather the open vocabulary.
 ##########################################################
-
 if [ ! -f "${data_dir}/scenegraphs.json" ]; then
-  python "dataset-tools/create_visual_genome_text_graphs.py" \
+  python "dataset-tools/create_vg_text_graphs.py" \
     --logtostderr \
     --caption_annotations_file="${data_dir}/region_descriptions.json" \
     --scenegraph_annotations_file="${data_dir}/scenegraphs.json"
 fi
 
-python "dataset-tools/create_visual_genome_vocabulary.py" \
-  --scenegraph_annotations_file="${data_dir}/scenegraphs.json" \
-  --output_file="${data_dir}/vocab-vg.txt"
+if [ ! -f "${data_dir}/vocab-vg.txt" ]; then
+  python "dataset-tools/create_vg_vocabulary.py" \
+    --scenegraph_annotations_file="${data_dir}/scenegraphs.json" \
+    --output_file="${data_dir}/vocab-vg.txt"
+fi
 
-exit 0
+##########################################################
+# Create the tfrecord files.
+##########################################################
+if [ ! -d "${data_dir}/tfrecords/vg-gt-graph-zareian" ]; then
+  python "dataset-tools/create_vg_gt_graph_tf_record.py" \
+    --split_pkl_file="${data_dir}/metadata/VG/hanwang/split.pkl" \
+    --proposal_feature_dir="${data_dir}/frcnn_proposals/" \
+    --scene_graph_pkl_file="${data_dir}/metadata/VG/hanwang/sg.pkl" \
+    --embedding_pkl_file="${data_dir}/metadata/VG/hanwang/class_embs.pkl" \
+    --output_directory="${data_dir}/tfrecords/vg-gt-graph-zareian"
+fi
 
-python "dataset-tools/create_visual_genome_gt_graph_tf_record.py" \
-  --split_pkl_file="${data_dir}/metadata/VG/hanwang/split.pkl" \
-  --proposal_feature_dir="${data_dir}/frcnn_proposals_50_iou0.7/" \
-  --scene_graph_pkl_file="${data_dir}/metadata/VG/hanwang/sg.pkl" \
-  --embedding_pkl_file="${data_dir}/metadata/VG/hanwang/class_embs.pkl" \
-  --output_directory="${data_dir}/tfrecords/caption-graph-hanwang-v3"
+if [ ! -d "${data_dir}/tfrecords/vg-gt-graph-xu" ]; then
+  python "dataset-tools/create_vg_gt_graph_tf_record.py" \
+    --split_pkl_file="${data_dir}/metadata/VG/stanford/split_stanford.pkl" \
+    --proposal_feature_dir="${data_dir}/frcnn_proposals/" \
+    --scene_graph_pkl_file="${data_dir}/metadata/VG/stanford/sg_stanford_with_duplicates.pkl" \
+    --embedding_pkl_file="${data_dir}/metadata/VG/stanford/word_emb_stanford_2.pkl" \
+    --output_directory="${data_dir}/tfrecords/vg-gt-graph-xu"
+fi
 
-python "dataset-tools/create_visual_genome_gt_graph_tf_record.py" \
-  --split_pkl_file="${data_dir}/metadata/VG/stanford/split_stanford.pkl" \
-  --proposal_feature_dir="${data_dir}/frcnn_proposals_50_iou0.7/" \
-  --scene_graph_pkl_file="${data_dir}/metadata/VG/stanford/sg_stanford_with_duplicates.pkl" \
-  --embedding_pkl_file="${data_dir}/metadata/VG/stanford/word_emb_stanford_2.pkl" \
-  --output_directory="${data_dir}/tfrecords/caption-graph-stanford-v3"
+if [ ! -d "${data_dir}/tfrecords/vg-cap-graph-zareian" ]; then
+  python "dataset-tools/create_vg_cap_graph_tf_record.py" \
+    --text_graphs_json_file="${data_dir}/scenegraphs.json" \
+    --split_pkl_file="${data_dir}/metadata/VG/hanwang/split.pkl" \
+    --proposal_feature_dir="${data_dir}/frcnn_proposals/" \
+    --scene_graph_pkl_file="${data_dir}/metadata/VG/hanwang/sg.pkl" \
+    --embedding_pkl_file="${data_dir}/metadata/VG/hanwang/class_embs.pkl" \
+    --output_directory="${data_dir}/tfrecords/vg-cap-graph-zareian"
+fi
 
-python "dataset-tools/create_visual_genome_cap_graph_tf_record.py" \
-  --text_graphs_json_file="${data_dir}/scenegraphs.json" \
-  --split_pkl_file="${data_dir}/metadata/VG/hanwang/split.pkl" \
-  --proposal_feature_dir="${data_dir}/frcnn_proposals_50_iou0.7/" \
-  --scene_graph_pkl_file="${data_dir}/metadata/VG/hanwang/sg.pkl" \
-  --embedding_pkl_file="${data_dir}/metadata/VG/hanwang/class_embs.pkl" \
-  --output_directory="${data_dir}/tfrecords/cap-graph-hanwang"
-
-python "dataset-tools/create_visual_genome_cap_graph_tf_record.py" \
-  --text_graphs_json_file="${data_dir}/scenegraphs.json" \
-  --split_pkl_file="${data_dir}/metadata/VG/stanford/split_stanford.pkl" \
-  --proposal_feature_dir="${data_dir}/frcnn_proposals_50_iou0.7/" \
-  --scene_graph_pkl_file="${data_dir}/metadata/VG/stanford/sg_stanford_with_duplicates.pkl" \
-  --embedding_pkl_file="${data_dir}/metadata/VG/stanford/word_emb_stanford_2.pkl" \
-  --output_directory="${data_dir}/tfrecords/cap-graph-stanford"
+if [ ! -d "${data_dir}/tfrecords/vg-cap-graph-xu" ]; then
+  python "dataset-tools/create_vg_cap_graph_tf_record.py" \
+    --text_graphs_json_file="${data_dir}/scenegraphs.json" \
+    --split_pkl_file="${data_dir}/metadata/VG/stanford/split_stanford.pkl" \
+    --proposal_feature_dir="${data_dir}/frcnn_proposals/" \
+    --scene_graph_pkl_file="${data_dir}/metadata/VG/stanford/sg_stanford_with_duplicates.pkl" \
+    --embedding_pkl_file="${data_dir}/metadata/VG/stanford/word_emb_stanford_2.pkl" \
+    --output_directory="${data_dir}/tfrecords/vg-cap-graph-xu"
+fi
