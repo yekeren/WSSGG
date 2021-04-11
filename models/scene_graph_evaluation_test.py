@@ -19,7 +19,7 @@ from __future__ import print_function
 
 import numpy as np
 import tensorflow as tf
-from metrics.scene_graph_evaluation import SceneGraphEvaluator
+from models.scene_graph_evaluation import SceneGraphEvaluator
 
 
 class SceneGraphEvaluatorTest(tf.test.TestCase):
