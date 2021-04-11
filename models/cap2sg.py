@@ -42,7 +42,7 @@ from models.cap2sg_relation import detect_relations
 from models.cap2sg_common_sense import train_common_sense_model
 from models.cap2sg_common_sense import apply_common_sense_refinement
 
-from model_utils.scene_graph_evaluation import SceneGraphEvaluator
+from models.scene_graph_evaluation import SceneGraphEvaluator
 
 
 class Cap2SG(model_base.ModelBase):
