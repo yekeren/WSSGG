@@ -70,7 +70,8 @@ ln -s "SceneGraphParser/sng_parser"
 
 ### 2.1 VG-GT-Graph and VG-Cap-Graph
 
-Typing ```sh dataset-tools/create_vg_settings.sh "vg-gt-cap"``` will generate VG-related files under the folder "vg-gt-cap" (for both VG-GT-Graph and VG-Cap-Graph settings). Basically, it will download datasets and launch the following programs under the [dataset-tools](dataset-tools) directory:
+Typing ```sh dataset-tools/create_vg_settings.sh "vg-gt-cap"``` will generate VG-related files under the folder "vg-gt-cap" (for both VG-GT-Graph and VG-Cap-Graph settings). 
+Basically, it will download the datasets and launch the following programs under the [dataset-tools](dataset-tools) directory.
 
 | Name                                                                               | Desc.                                                 |
 |------------------------------------------------------------------------------------|-------------------------------------------------------|
@@ -82,6 +83,17 @@ Typing ```sh dataset-tools/create_vg_settings.sh "vg-gt-cap"``` will generate VG
 
 
 ### 2.2 COCO-Cap-Graph
+
+Typing ```sh dataset-tools/create_coco_settings.sh "coco-cap" "vg-gt-cap"``` will generate COCO-related files under the folder "coco-cap" (for COCO-Cap-Graph setting). 
+Basically, it will download the datasets and launch the following programs under the [dataset-tools](dataset-tools) directory.
+Please note that the "vg-gt-cap" directory should be created in that we need to get the split information (either Zareian et al. or Xu et al.).
+
+| Name                                                                                   | Desc.                                                   |
+|----------------------------------------------------------------------------------------|---------------------------------------------------------|
+| [create_coco_frcnn_proposals.py](dataset-tools/create_coco_frcnn_proposals.py)         | Extract COCO visual proposals using Faster-RCNN         |
+| [create_coco_text_graphs.py](dataset-tools/create_coco_text_graphs.py)                 | Extract COCO text graphs using Language Parser          |
+| [create_coco_vocabulary](dataset-tools/create_coco_vocabulary.py)                      | Gather the COCO vocabulary                              |
+| [create_coco_cap_graph_tf_record.py](dataset-tools/create_coco_cap_graph_tf_record.py) | Generate TF record files for the COCO-Cap-Graph setting |
 
 ## 3 Training and Evaluation
 
