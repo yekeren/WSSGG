@@ -73,7 +73,7 @@ def draw_arrow_on_image(image,
         (x2 - thickness, y2 - thickness, x2 + thickness, y2 + thickness),
         fill=color)
   try:
-    font = ImageFont.truetype('arial.ttf', 24)
+    font = ImageFont.truetype('arial.ttf', 48)
   except IOError:
     font = ImageFont.load_default()
 
@@ -185,25 +185,33 @@ def draw_bounding_box_py_func_fn(*args):
   Returns:
     uint8 numpy array with shape (height, width, 3) with overlaid boxes.
   """
-  image, total, boxes, labels, scores = args
+  image, total, boxes, labels, scores = args[:5]
+  thickness = 1
+  if len(args) > 5:
+    thickness = args[5]
   for i in range(total - 1, -1, -1):
     ymin, xmin, ymax, xmax = boxes[i]
     display_str = ''
     if labels is not None and scores is not None:
       display_str = '%i%% %s' % (int(scores[i] * 100), labels[i].decode('utf8'))
     elif labels is not None:
-      display_str = '%s' % (labels[i].decode('utf8'))
+      try:
+        display_str = '%s' % (labels[i].decode('utf8'))
+      except Exception as ex:
+        display_str = labels[i]
     elif scores is not None:
       display_str = '%i%%' % (int(scores[i] * 100))
     color = STANDARD_COLORS[i % len(STANDARD_COLORS)]
 
+    display_str_list = [display_str] if display_str else []
     draw_bounding_box_on_image_array(image,
                                      ymin,
                                      xmin,
                                      ymax,
                                      xmax,
                                      color,
-                                     display_str_list=[display_str])
+                                     thickness=thickness,
+                                     display_str_list=display_str_list)
   return image
 
 
