@@ -115,4 +115,28 @@ Please note that the "vg-gt-cap" directory should be created in that we need to 
 
 ## 3 Training and Evaluation
 
+Multi-GPUs (5 GPUs in our case) training cost less than 2.5 hours to train a single model, while single-GPU strategy requires more than 8 hours.
+
+### 3.1 Multi-GPUs training
+
+We use [TF distributed training](https://www.tensorflow.org/guide/distributed_training) to train the models shown in our paper.
+For example, the following command shall create and train a model specified by the proto config file [configs/GT-Graph-Zareian/base_phr_ite_seq.pbtxt](configs/GT-Graph-Zareian/base_phr_ite_seq.pbtxt), and save the trained model to a directory named "logs/base_phr_ite_seq".
+In [train.sh](train.sh), we create 1 ps, 1, chief, 3 workers, and 1 evaluator.
+The 6 instances are distributed on 5 GPUS (4 for training and 1 for evaluation).
+
+```
+sh train.sh \
+  "configs/GT-Graph-Zareian/base_phr_ite_seq.pbtxt" \
+  "logs/base_phr_ite_seq"
+```
+
+### 3.2 Single GPU training
+Our model can also be trained using single GPU strategy such as follow.
+However, we would suggest to half the learning rate or explore for better other hyper-parameters.
+```
+python "modeling/trainer_main.py" \
+  --pipeline_proto "configs/GT-Graph-Zareian/base_phr_ite_seq.pbtxt" \
+  --model_dir ""logs/base_phr_ite_seq""
+```
+
 ## 4 Visualization
