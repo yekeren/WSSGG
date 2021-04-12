@@ -10,7 +10,11 @@ README.md shall be finished soon.
 * [2 Settings](#2-settings)
     - [2.1 VG-GT-Graph and VG-Cap-Graph](#21-vg-gt-graph-and-vg-cap-graph)
     - [2.2 COCO-Cap-Graph](#22-coco-cap-graph)
-* [3 Training and Evaluation](#training)
+* [3 Training and Evaluation](#3-training)
+    - [3.1 Multi-GPUs training](#31-multi-gpus-training)
+    - [3.2 Single-GPU training](#32-single-gpu-training)
+    - [3.3 Performance on test set](#33-performance-on-test-set)
+    - [3.4 Primary configs and implementations](#34-primary-configs-and-implementations)
 * [4 Visualization](#visualization)
 
 ## 0 Overview
@@ -130,13 +134,42 @@ sh train.sh \
   "logs/base_phr_ite_seq"
 ```
 
-### 3.2 Single GPU training
+### 3.2 Single-GPU training
+
 Our model can also be trained using single GPU strategy such as follow.
 However, we would suggest to half the learning rate or explore for better other hyper-parameters.
+
 ```
 python "modeling/trainer_main.py" \
   --pipeline_proto "configs/GT-Graph-Zareian/base_phr_ite_seq.pbtxt" \
   --model_dir ""logs/base_phr_ite_seq""
 ```
+
+### 3.3 Performance on test set
+
+During the training process, there is an evaluator measuring the model's performance on the validation set and save the best model checkpoint.
+Finally, we use the following command to evaluate the saved model's performance on the test set.
+This evaluation process will last for 2-3 hours depends on the post-process parameters (e.g., see [here](configs/GT-Graph-Zareian/base_phr_ite_seq.pbtxt#L69)).
+Currently, there are many kinds of stuff written in pure python, which we would later optimize to utilize GPU better to reduce the final evaluation time.
+
+```
+python "modeling/trainer_main.py" \
+  --pipeline_proto "configs/GT-Graph-Zareian/base_phr_ite_seq.pbtxt" \
+  --model_dir ""logs/base_phr_ite_seq"" \
+  --job test
+```
+
+### 3.4 Primary configs and implementations
+
+Take [configs/GT-Graph-Zareian/base_phr_ite_seq.pbtxt](configs/GT-Graph-Zareian/base_phr_ite_seq.pbtxt) as an example, the following configs control the model's behavior.
+
+| Name                 | Desc.                                                                          | Impl.                                                          |
+|----------------------|--------------------------------------------------------------------------------|----------------------------------------------------------------|
+| linguistic_options   | Specify the phrasal context modeling, remove the section to disable it.        | [models/cap2sg_linguistic.py](models/cap2sg_linguistic.py)     |
+| grounding_options    | Specify the grounding options.                                                 | [models/cap2sg_grounding.py](models/cap2sg_grounding.py)       |
+| detection_options    | Specify the WSOD model, ```num_iterations``` to control the iterative process. | [models/cap2sg_detection.py](models/cap2sg_detection.py)       |
+| relation_options     | Specify the relation detection modeling.                                       | [models/cap2sg_relation.py](models/cap2sg_relation.py)         |
+| common_sense_options | Specify the sequential context modeling, remove the section to disable it.     | [models/cap2sg_common_sense.py](models/cap2sg_common_sense.py) |
+
 
 ## 4 Visualization
