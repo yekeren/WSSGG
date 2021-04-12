@@ -1,0 +1,299 @@
+Frisbee
+air
+animal
+arm
+back
+backpack
+bag
+ball
+banana
+basket
+bat
+bathroom
+beach
+bear
+bed
+bench
+bicycle
+bike
+bird
+blanket
+board
+boat
+book
+bottle
+bowl
+box
+boy
+branch
+bread
+brick
+bridge
+broccoli
+building
+bus
+bush
+button
+cabinet
+cake
+car
+cat
+catcher
+ceiling
+chair
+cheese
+clock
+cloth
+cloud
+collar
+container
+couch
+counter
+court
+cow
+curtain
+design
+desk
+dirt
+dog
+door
+dough nut
+ear
+edge
+elephant
+engine
+eye
+fence
+field
+finger
+flag
+floor
+flower
+food
+foot
+fork
+frame
+fruit
+giraffe
+girl
+glass
+glove
+grass
+ground
+hair
+hand
+handle
+hat
+head
+headlight
+helmet
+horn
+horse
+house
+hydrant
+jacket
+keyboard
+kitchen
+kite
+knife
+lamp
+laptop
+leaf
+leg
+letter
+light
+line
+logo
+mirror
+motorcycle
+mountain
+mouth
+napkin
+neck
+nose
+number
+ocean
+orange
+pant
+paper
+part
+pavement
+paw
+people
+person
+phone
+picture
+pillow
+pizza
+plane
+plant
+plate
+platform
+player
+pole
+pot
+racket
+reflection
+road
+rock
+roof
+room
+sandwich
+seat
+shadow
+sheep
+shelf
+shirt
+shoe
+short
+sidewalk
+sign
+sink
+skateboard
+skateboarder
+ski
+skier
+sky
+snow
+sock
+spot
+stand
+stove
+street light
+stripe
+suitcase
+sunglass
+surfboard
+surfer
+table
+tail
+teddy bear
+tie
+tile
+tire
+toddler
+toilet
+top
+towel
+tower
+track
+train
+tray
+tree
+truck
+trunk
+tv
+umbrella
+vase
+wall
+watch
+water
+wave
+wheel
+window
+windshield
+wing
+wire
+wood
+word
+writing
+zebra
+above
+across
+adorn
+against
+along
+around
+at
+attach to
+behind
+belong to
+below
+beneath
+beside
+between
+build into
+by
+carry
+cast
+catch
+connect to
+contain
+cover
+cover in
+cover with
+cross
+cut
+drive on
+eat
+face
+fill with
+fly
+fly in
+for
+from
+grow in
+grow on
+hang in
+hang on
+have
+hit
+hold
+hold by
+in
+in front of
+in middle of
+inside
+lay in
+lay on
+lean on
+look at
+mount on
+near
+next to
+of
+on
+on back of
+on bottom of
+on side of
+on top of
+outside
+over
+paint on
+park
+part of
+play
+print on
+pull
+read
+reflect in
+rest on
+ride
+say
+show
+sit at
+sit in
+sit on
+small than
+stand behind
+stand on
+standing by
+standing in
+standing next to
+support
+surround
+swing
+tall than
+throw
+to
+touch
+under
+underneath
+use
+walk
+walk in
+walk on
+wear
+wear by
+with
+write on
