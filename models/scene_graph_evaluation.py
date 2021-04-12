@@ -123,7 +123,7 @@ class SceneGraphEvaluator(object):
         per_image_recall50.append(1.0 * recall50 / n_triples)
         per_image_recall100.append(1.0 * recall100 / n_triples)
       else:
-        logging.warn('Image %s has no ground-truth annotations.')
+        logging.warn('Image %s has no ground-truth annotations.', image_id)
 
       if (image_index + 1) % 100 == 0:
         logging.info('Evaluate on %i/%i.', image_index + 1,
