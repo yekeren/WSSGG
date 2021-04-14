@@ -18,23 +18,21 @@ from __future__ import division
 from __future__ import print_function
 
 import os
-import cv2
 import json
-import zipfile
 
 from absl import app
 from absl import flags
 from absl import logging
 
-import numpy as np
+import subprocess
 import tensorflow as tf
 from multiprocessing import Pool
 import sng_parser
 
 flags.DEFINE_string('caption_annotations_file', '',
-                    'Path to the caption annotations.')
+                    '[input] Caption annotations JSON file.')
 flags.DEFINE_string('scenegraph_annotations_file', '',
-                    'Path to the scenegraphs annotations.')
+                    '[output] Scenegraph annotations JSON file.')
 flags.DEFINE_integer('number_of_processes', 30, 'Number of threads.')
 
 FLAGS = flags.FLAGS
@@ -61,40 +59,55 @@ def _extract_scene_graphs(image_id, captions):
   }
 
 
-def _create_scene_graphs(input_file, output_file):
-  """Extracts scene graphs.
+def _create_scenegraphs_from_captions(caption_annotations_file,
+                                      scenegraph_annotations_file):
+  """Creates scene graphs from captions annotations.
 
   Args:
-    zip_file: ZIP file containing the image files.
+    caption_annotations_file: JSON file containing caption annotations.
+    scenegraph_annotations_file: JSON file containing caption annotations.
   """
-  with tf.io.gfile.GFile(input_file, 'r') as f:
-    annots = json.load(f)
+  with tf.io.gfile.GFile(caption_annotations_file, 'r') as fid:
+    annots = json.load(fid)
+
+  images, annots = annots['images'], annots['annotations']
+  id_to_captions = {}
+  for annot in annots:
+    image_id = annot['image_id']
+    id_to_captions.setdefault(image_id, []).append(annot['caption'])
+  assert len(images) == len(id_to_captions)
 
   res_list = []
   with Pool(processes=FLAGS.number_of_processes) as pool:
-    for i, annot in enumerate(annots):
-      image_id = annot['id']
-      captions = [x['phrase'] for x in annot['regions']]
-      res_list.append(
-          pool.apply_async(_extract_scene_graphs, (image_id, captions)))
+    for i, image in enumerate(images):
+      image_id = image['id']
+      captions = id_to_captions[image_id]
+      scene_graphs = []
 
+      res_list.append(pool.apply_async(_extract_scene_graphs, (image_id, captions)))
     pool.close()
     pool.join()
 
-  data = []
-  for res in res_list:
-    data.append(res.get())
+  for image, res in zip(images, res_list):
+    res = res.get()
+    assert image['id'] == res['image_id']
+    image['captions'] = res['captions']
+    image['scene_graphs'] = res['scene_graphs']
 
-  with tf.io.gfile.GFile(output_file, 'w') as fid:
-    json.dump(data, fid)
-  logging.info('Done')
+  with tf.io.gfile.GFile(scenegraph_annotations_file, 'w') as fid:
+    json.dump(images, fid)
 
 
 def main(_):
+  assert FLAGS.caption_annotations_file, '`caption_annotations_file` missing.'
+  assert FLAGS.scenegraph_annotations_file, '`scenegraph_annotations_file` missing.'
+
   logging.set_verbosity(logging.INFO)
 
-  _create_scene_graphs(FLAGS.caption_annotations_file,
-                       FLAGS.scenegraph_annotations_file)
+  _create_scenegraphs_from_captions(FLAGS.caption_annotations_file,
+                                    FLAGS.scenegraph_annotations_file)
+
+  logging.info('Done')
 
 
 if __name__ == '__main__':

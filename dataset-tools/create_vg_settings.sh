@@ -55,14 +55,20 @@ if [ ! -d "${data_dir}/images" ]; then
 fi
 
 ################################################################################
-# Download visual genome region descriptions. 
+# Download visual genome region descriptions and meta data. 
 ################################################################################
 if [ ! -f "${data_dir}/region_descriptions.json" ]; then
   download \
     "http://visualgenome.org/static/data/dataset/region_descriptions.json.zip" \
     "${data_dir}" "region_descriptions.json.zip"
-
   unzip -q "${data_dir}/region_descriptions.json.zip" -d "${data_dir}"
+fi
+
+if [ ! -f "${data_dir}/image_data.json" ]; then
+  download \
+    "http://visualgenome.org/static/data/dataset/image_data.json.zip" \
+    "${data_dir}" "image_data.json.zip"
+  unzip -q "${data_dir}/image_data.json.zip" -d "${data_dir}"
 fi
 
 ################################################################################
