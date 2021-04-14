@@ -87,7 +87,7 @@ python "dataset-tools/export_glove_words_and_embeddings.py" \
 ## 2 Settings
 
 **To avoid the time-consuming Faster RCNN processes** in [2.1](#21-vg-gt-graph-and-vg-cap-graph) and [2.2](#22-coco-cap-graph), users can directly download the features we provided at the following URLs.
-Then, the scripts [create_vg_settings.sh](dataset-tools/create_vg_settings.sh) and [create_coco_setting.sh](dataset-tools/create_coco_setting.sh) will check the existense of the Faster-RCNN features and skip the processs if they are provided.
+Then, the scripts [create_vg_settings.sh](dataset-tools/create_vg_settings.sh#L77) and [create_coco_setting.sh](dataset-tools/create_coco_setting.sh#62) will check the existense of the Faster-RCNN features and skip the processs if they are provided.
 Please note that in the following table, we assume the directory for holding the VG and COCO data to be ```vg-gt-cap``` and ```coco-cap```.
 
 | Name                      | URLs                                                                                              | Please extract to directory |
