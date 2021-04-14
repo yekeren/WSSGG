@@ -88,11 +88,12 @@ python "dataset-tools/export_glove_words_and_embeddings.py" \
 
 **To avoid the time-consuming Faster RCNN processes** in [2.1](#21-vg-gt-graph-and-vg-cap-graph) and [2.2](#22-coco-cap-graph), users can directly download the features we provided at the following URLs.
 Then, the scripts [create_vg_settings.sh](dataset-tools/create_vg_settings.sh) and [create_coco_setting.sh](dataset-tools/create_coco_setting.sh) will check the existense of the Faster-RCNN features and skip the processs if they are provided.
+Please note that in the following table, we assume the directory for holding the VG and COCO data to be ```vg-gt-cap``` and ```coco-cap```.
 
-| Name                      | URLs                                                                                              | Please extract to          |
-|---------------------------|---------------------------------------------------------------------------------------------------|----------------------------|
-| VG Faster-RCNN features   | https://storage.googleapis.com/weakly-supervised-scene-graphs-generation/vg_frcnn_proposals.zip   | vg-gt-cap/frcnn_proposals/ |
-| COCO Faster-RCNN features | https://storage.googleapis.com/weakly-supervised-scene-graphs-generation/coco_frcnn_proposals.zip | coco-cap/frcnn_proposals/  |
+| Name                      | URLs                                                                                              | Please extract to directory |
+|---------------------------|---------------------------------------------------------------------------------------------------|-----------------------------|
+| VG Faster-RCNN features   | https://storage.googleapis.com/weakly-supervised-scene-graphs-generation/vg_frcnn_proposals.zip   | vg-gt-cap/frcnn_proposals/  |
+| COCO Faster-RCNN features | https://storage.googleapis.com/weakly-supervised-scene-graphs-generation/coco_frcnn_proposals.zip | coco-cap/frcnn_proposals/   |
 
 ### 2.1 VG-GT-Graph and VG-Cap-Graph
 
