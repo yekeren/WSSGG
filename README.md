@@ -26,10 +26,6 @@ Then, we optimize a text-query-guided attention model (Sec. 3.2) to provide the 
 We use the joint probability to choose boxes associated with both subject and object (Sec. 3.3), then use the top scoring boxes to learn better grounding (Sec. 3.4).
 Finally, we use an RNN (Sec. 3.5) to capture the vision-language common-sense and refine our predictions.
 
-* We would later achieve the TF record files for training and evaluation (```3 Training and Evaluation```).
-   - Then, users could skip ```1 Installation``` and ```2 settings``` if they are not extending the work on other datasets.
-* We shall release our models.
-
 <img src="g3doc/images/overview.png">
 
 ## 1 Installation
@@ -89,6 +85,14 @@ python "dataset-tools/export_glove_words_and_embeddings.py" \
 ```
 
 ## 2 Settings
+
+**To avoid the time-consuming Faster RCNN processes** in [2.1](#21-vg-gt-graph-and-vg-cap-graph) and [2.2](#22-coco-cap-graph), users can directly download the features we provided at the following URLs.
+Then, the scripts [create_vg_settings.sh](dataset-tools/create_vg_settings.sh) and [create_coco_setting.sh](dataset-tools/create_coco_setting.sh) will check the existense of the Faster-RCNN features and skip the processs if they are provided.
+
+| Name                      | URLs                                                                                              | Please extract to          |
+|---------------------------|---------------------------------------------------------------------------------------------------|----------------------------|
+| VG Faster-RCNN features   | https://storage.googleapis.com/weakly-supervised-scene-graphs-generation/vg_frcnn_proposals.zip   | vg-gt-cap/frcnn_proposals/ |
+| COCO Faster-RCNN features | https://storage.googleapis.com/weakly-supervised-scene-graphs-generation/coco_frcnn_proposals.zip | coco-cap/frcnn_proposals/  |
 
 ### 2.1 VG-GT-Graph and VG-Cap-Graph
 
@@ -173,3 +177,5 @@ Take [configs/GT-Graph-Zareian/base_phr_ite_seq.pbtxt](configs/GT-Graph-Zareian/
 
 
 ## 4 Visualization
+
+Please see [cap2sg.ipynb](cap2sg.ipynb).
