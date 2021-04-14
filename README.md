@@ -2,7 +2,7 @@ README.md shall be finished soon.
 
 # WSSGG
 
-* [0 Overview](#0-Overview)
+* [0 Overview](#0-overview)
 * [1 Installation](#1-installation)
     - [1.1 Faster-RCNN](#11-faster-rcnn)
     - [1.2 Language Parser](#12-language-parser)
@@ -10,14 +10,16 @@ README.md shall be finished soon.
 * [2 Settings](#2-settings)
     - [2.1 VG-GT-Graph and VG-Cap-Graph](#21-vg-gt-graph-and-vg-cap-graph)
     - [2.2 COCO-Cap-Graph](#22-coco-cap-graph)
-* [3 Training and Evaluation](#3-training)
+* [3 Training and Evaluation](#3-training-and-evaluation)
     - [3.1 Multi-GPUs training](#31-multi-gpus-training)
     - [3.2 Single-GPU training](#32-single-gpu-training)
     - [3.3 Performance on test set](#33-performance-on-test-set)
     - [3.4 Primary configs and implementations](#34-primary-configs-and-implementations)
-* [4 Visualization](#visualization)
+* [4 Visualization](#4-visualization)
+* [5 Reference](#5-reference)
 
 ## 0 Overview
+
 Our model uses the image's paired caption as weak supervision to learn the entities in the image and the relations among them.
 At inference time, it generates scene graphs without help from texts.
 To learn our model, we first allow context information to propagate on the text graph to enrich the entity word embeddings (Sec. 3.1). 
@@ -180,3 +182,17 @@ Take [configs/GT-Graph-Zareian/base_phr_ite_seq.pbtxt](configs/GT-Graph-Zareian/
 ## 4 Visualization
 
 Please see [cap2sg.ipynb](cap2sg.ipynb).
+
+## 5 Reference
+
+If you find this project helps, please cite our paper :)
+
+```
+@InProceedings{Ye_2021_CVPR,
+  author = {Ye, Keren and Kovashka, Adriana},
+  title = {Linguistic Structures as Weak Supervision for Visual Scene Graph Generation},
+  booktitle = {Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)},
+  month = {June},
+  year = {2021}
+}
+```
