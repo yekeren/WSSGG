@@ -32,19 +32,24 @@ from models.cap2sg_data import DataTuple
 
 
 def ground_entities(options, dt, is_training):
-  """Grounds entities.
+  """Grounds the mentioned entities, find their associated visual regions.
+
+  This function shall GET and SET the global tensors in the DataTuple object.
+  See cap2sg_data.py for the detailed explainations for all global tensors.
 
   Args:
     options: A Cap2SGGrounding proto.
-    dt: A DataTuple object.
+    dt: A DataTuple object, served as a collection of global variables.
+    is_training: If True, training TF graph is created.
 
   Returns:
-    dt.attention
-    dt.entity_image_logits
-    dt.attribute_image_logits
-    dt.entity_proposal_id
-    dt.entity_proposal_box
-    dt.entity_proposal_score
+    dt.attention: Image-text attention, [batch, max_n_entity, max_n_proposal].
+    dt.entity_image_logits: Entity classification, [batch, max_n_entity, vocab_size].
+    dt.attribute_image_logits: Attribute classification, [batch, max_n_entity, vocab_size].
+    dt.grounding.entity_proposal_id: Grounding vector, the ``g'' vector in our paper, [batch, max_n_entity].
+    dt.grounding.entity_proposal_box: Grounded boxes, [batch, max_n_entity, 4],
+    dt.grounding.entity_proposal_score: Grounding scores, [batch, max_n_entity]
+    dt.grounding.entity_proposal_feature: Grounded features, [batch, max_n_entity, vdims]
   """
   if not isinstance(options, model_pb2.Cap2SGGrounding):
     raise ValueError('Options has to be a Cap2SGGrounding proto.')
