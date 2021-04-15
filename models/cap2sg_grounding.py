@@ -52,24 +52,17 @@ def ground_entities(options, dt, is_training):
   if not isinstance(dt, DataTuple):
     raise ValueError('Invalid DataTuple object.')
 
-  # Compute the attention head.
   hidden_size = dt.dims
-  attention_head = tf.layers.Dense(hidden_size,
-                                   activation=None,
-                                   use_bias=True,
-                                   kernel_initializer='glorot_normal',
-                                   name='attention_head')(dt.proposal_features)
-
   attention_mask = tf.expand_dims(dt.proposal_masks, 1)
 
-  # Compute the entity head and attribute head.
-  entity_head, attribute_head = [
+  # Compute the attention, entity, and attribute heads.
+  attention_head, entity_head, attribute_head = [
       tf.layers.Dense(dt.dims,
                       activation=None,
                       use_bias=True,
                       kernel_initializer='glorot_normal',
                       name=name)(dt.proposal_features)
-      for name in ['entity_head', 'attribute_head']
+      for name in ['attention_head', 'entity_head', 'attribute_head']
   ]
 
   # Image-level classification using an attention model.
@@ -102,6 +95,7 @@ def ground_entities(options, dt, is_training):
         dt.attention,
         tf.gather_nd(class_scores, indices=_get_full_indices(dt.entity_ids)))
 
+  # Set the grounding results.
   dt.grounding.entity_proposal_id = tf.math.argmax(dummy_attention,
                                                    axis=2,
                                                    output_type=tf.int32)
