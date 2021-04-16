@@ -72,7 +72,7 @@ fi
 # Create the tfrecord files.
 ##########################################################
 if [ ! -d "${data_dir}/tfrecords/coco-cap-graph-zareian" ]; then
-  python "dataset-tools/create_coco_tf_record.py" \
+  python "dataset-tools/create_coco_cap_graph_tf_record.py" \
     --logtostderr \
     --split_pkl_file="${vg_dir}/metadata/VG/hanwang/split.pkl" \
     --vg_meta_file="${vg_dir}/image_data.json" \
@@ -82,7 +82,7 @@ if [ ! -d "${data_dir}/tfrecords/coco-cap-graph-zareian" ]; then
 fi
 
 if [ ! -d "${data_dir}/tfrecords/coco-cap-graph-xu" ]; then
-  python "dataset-tools/create_coco_tf_record.py" \
+  python "dataset-tools/create_coco_cap_graph_tf_record.py" \
     --logtostderr \
     --split_pkl_file="${vg_dir}/metadata/VG/stanford/split_stanford.pkl" \
     --vg_meta_file="${vg_dir}/image_data.json" \
