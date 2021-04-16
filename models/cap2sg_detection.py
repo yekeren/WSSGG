@@ -33,18 +33,19 @@ def detect_entities(options, dt):
 
   Args:
     options: A Cap2SGDetection proto.
-    dt: A DataTuple object.
+    dt: A DataTuple object, served as a collection of global variables.
 
   Returns:
-    dt.detection.valid_detections
-    dt.detection.nmsed_boxes
-    dt.detection.nmsed_scores
-    dt.detection.nmsed_classes
-    dt.detection.nmsed_attribute_scores
-    dt.detection.nmsed_attribute_classes
-    dt.refined_entity_proposal_id
-    dt.refined_entity_proposal_box
-    dt.refined_entity_proposal_score
+    dt.detection.valid_detections: Number of detections, [batch].
+    dt.detection.nmsed_boxes: Detection boxes, [batch, max_n_detection, 4].
+    dt.detection.nmsed_scores: Detection scores, [batch, max_n_detection],
+    dt.detection.nmsed_classes: Detection classes, [batch, max_n_detection],
+    dt.detection.nmsed_attribute_scores: Object attribute scores, [batch, max_n_detection].
+    dt.detection.nmsed_attribute_classes: Object attribute class, [batch_max_n_detection].
+    dt.refined_grounding.entity_proposal_id: Grounding vector, the ``g'' vector in our paper, [batch, max_n_entity].
+    dt.refined_grounding.entity_proposal_box: Grounded boxes, [batch, max_n_entity, 4],
+    dt.refined_grounding.entity_proposal_score: Grounding scores, [batch, max_n_entity]
+    dt.refined_grounding.entity_proposal_feature: Grounded features, [batch, max_n_entity, vdims]
   """
   if not isinstance(options, model_pb2.Cap2SGDetection):
     raise ValueError('Options has to be a Cap2SGDetection proto.')
@@ -85,6 +86,7 @@ def detect_entities(options, dt):
     dt.detection_instance_scores_list.append(detection_instance_scores)
 
     # Update the proposal id associated to the image-level entity label.
+    # I.e., update the ``g'' vector in the paper.
     dummy_attention = tf.gather_nd(tf.transpose(detection_instance_scores,
                                                 [0, 2, 1]),
                                    indices=_get_full_indices(dt.entity_ids))
