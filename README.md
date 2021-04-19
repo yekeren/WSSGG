@@ -196,3 +196,15 @@ If you find this project helps, please cite our paper :)
   year = {2021}
 }
 ```
+
+Also, please take a look at our old work in ICCV2019.
+
+```
+@InProceedings{Ye_2019_ICCV,
+  author = {Ye, Keren and Zhang, Mingda and Kovashka, Adriana and Li, Wei and Qin, Danfeng and Berent, Jesse},
+  title = {Cap2Det: Learning to Amplify Weak Caption Supervision for Object Detection},
+  booktitle = {Proceedings of the IEEE/CVF International Conference on Computer Vision (ICCV)},
+  month = {October},
+  year = {2019}
+}
+```
