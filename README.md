@@ -185,7 +185,7 @@ Please see [cap2sg.ipynb](cap2sg.ipynb).
 
 ## 5 Reference
 
-If you find this project helps, please cite our paper :)
+If you find this project helps, please cite our CVPR2021 paper :)
 
 ```
 @InProceedings{Ye_2021_CVPR,
