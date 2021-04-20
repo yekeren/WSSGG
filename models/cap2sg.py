@@ -176,11 +176,11 @@ class Cap2SG(model_base.ModelBase):
     }
     if self.options.HasField('common_sense_options'):
       predictions.update({
-        'subject_proposal_id':
-            dt.subject_proposal_id,
-        'object_proposal_id':
-            dt.object_proposal_id,
-        })
+          'subject_proposal_id':
+          dt.subject_proposal_id,
+          'object_proposal_id':
+          dt.object_proposal_id,
+      })
     self.data_tuple = dt
     return predictions
 
@@ -398,14 +398,14 @@ class Cap2SG(model_base.ModelBase):
 
     if self.options.detection_options.predict_attributes:
       loss_dict.update({
-        'detection/attribute/loss':
-            self.options.detection_options.loss_weight *
-            self._compute_instance_level_detection_loss(
-                dt.proposal_masks,
-                dt.attribute_instance_logits,
-                dt.attribute_instance_labels,
-                foreground_mask=True),
-        })
+          'detection/attribute/loss':
+          self.options.detection_options.loss_weight *
+          self._compute_instance_level_detection_loss(
+              dt.proposal_masks,
+              dt.attribute_instance_logits,
+              dt.attribute_instance_labels,
+              foreground_mask=True),
+      })
 
     for itno in range(self.options.detection_options.num_iterations):
       loss_dict.update({
@@ -443,6 +443,15 @@ class Cap2SG(model_base.ModelBase):
                                                           dt.predicate_labels,
                                                           foreground_mask=True),
       })
+
+    if self.options.weight_decay > 0:
+      for var in tf.trainable_variables():
+        if 'kernel' in var.op.name:
+          loss = tf.nn.l2_loss(var, name=var.op.name.split('/')[0])
+          loss = tf.multiply(self.options.weight_decay, loss,
+                             name='_'.join(var.op.name.split('/')[:2]) + '_loss')
+          tf.compat.v1.add_to_collection(
+              tf.GraphKeys.REGULARIZATION_LOSSES, loss)
     return loss_dict
 
   def build_metrics(self, inputs, predictions, **kwargs):
