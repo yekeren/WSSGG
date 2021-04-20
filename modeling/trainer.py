@@ -23,10 +23,9 @@ import os
 import re
 import tensorflow as tf
 
-from best_checkpoint_copier import BestCheckpointCopier
-
 from modeling.utils import optimization
 from modeling.utils import learning_rate_schedule
+from modeling.utils.best_checkpoint_copier import BestCheckpointCopier
 
 from models import builder
 from readers import reader
