@@ -218,27 +218,22 @@ class DataTuple(object):
   # Objects created by detection.detect_entities.
   ####################################################
 
-  # Entity detection logits, a [batch, max_n_proposal, vocab_size] float tensor.
-  detection_instance_logits = None
+  # Entity detection logits, [batch, max_n_proposal, vocab_size] float tensors.
   detection_instance_logits_list = []
 
-  # Normalized entity detection scores, a [batch, max_n_proposal, vocab_size] float tensor.
-  detection_instance_scores = None
+  # Normalized entity detection scores, [batch, max_n_proposal, vocab_size] float tensors.
   detection_instance_scores_list = []
 
-  # Entity detection labels, a [batch, max_n_proposal, vocab_size] float tensor.
-  detection_instance_labels = None
+  # Entity detection labels, [batch, max_n_proposal, vocab_size] float tensors.
   detection_instance_labels_list = []
 
-  # Attribute detection logits, a [batch, max_n_proposal, vocab_size] float tensor.
-  attribute_instance_logits = None
+  # Attribute detection logits, [batch, max_n_proposal, vocab_size] float tensors.
   attribute_instance_logits_list = []
 
-  # Normalized attribute detection scores, a [batch, max_n_proposal, vocab_size] float tensor.
+  # Normalized attribute detection scores, [batch, max_n_proposal, vocab_size] float tensors.
   attribute_instance_scores = None
 
-  # Attribute detection labels, a [batch, max_n_proposal, vocab_size] float tensor.
-  attribute_instance_labels = None
+  # Attribute detection labels, [batch, max_n_proposal, vocab_size] float tensors.
   attribute_instance_labels_list = []
 
   # Detection results.
