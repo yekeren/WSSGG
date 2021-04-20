@@ -185,7 +185,7 @@ Please see [cap2sg.ipynb](cap2sg.ipynb).
 
 ## 5 Reference
 
-If you find this project helps, please cite our paper :)
+If you find this project helps, please cite our CVPR2021 paper :)
 
 ```
 @InProceedings{Ye_2021_CVPR,
@@ -194,5 +194,17 @@ If you find this project helps, please cite our paper :)
   booktitle = {Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)},
   month = {June},
   year = {2021}
+}
+```
+
+Also, please take a look at our old work in ICCV2019.
+
+```
+@InProceedings{Ye_2019_ICCV,
+  author = {Ye, Keren and Zhang, Mingda and Kovashka, Adriana and Li, Wei and Qin, Danfeng and Berent, Jesse},
+  title = {Cap2Det: Learning to Amplify Weak Caption Supervision for Object Detection},
+  booktitle = {Proceedings of the IEEE/CVF International Conference on Computer Vision (ICCV)},
+  month = {October},
+  year = {2019}
 }
 ```
