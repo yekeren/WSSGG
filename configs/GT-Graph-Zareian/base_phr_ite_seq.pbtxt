@@ -32,7 +32,7 @@ test_reader {
 model {
   [Cap2SG.ext] {
     weight_decay: 1e-6
-    dropout_keep_prob: 0.6
+    dropout_keep_prob: 0.5
     parse_attribute_in_training: false
     parse_attribute_in_evaluation: false
     preprocess_options {
@@ -43,21 +43,18 @@ model {
       embedding_trainable: false
       glove_vocabulary_file: "zoo/glove_word_tokens.txt"
       glove_embedding_file: "zoo/glove_word_vectors.npy"
-      bias_mode: BIAS_MODE_TRAIN_FROM_EMBEDDING
+      bias_mode: BIAS_MODE_ZERO
     }
     linguistic_options {
-      weight_decay: 1e-8
       graph_network {
         message_passing {
           n_layer: 1
           add_bi_directional_edges: true
-          attn_dropout_keep_prob: 0.5
         }
       }
     }
     grounding_options {
       loss_weight: 1.0
-      midn_attention_dropout_keep_prob: 1.0
       two_branches: true
     }
     detection_options {
@@ -84,7 +81,6 @@ model {
       loss_weight: 0.5
       triple_loss_weight: 0.5
       rnn_hidden_units: 100
-      rnn_input_keep_prob: 0.8
       rnn_output_keep_prob: 0.8
       rnn_state_keep_prob: 0.8
     }
@@ -93,7 +89,7 @@ model {
 train_config {
   learning_rate_schedule {
     exponential_decay {
-      initial_learning_rate: 0.000005
+      initial_learning_rate: 0.00001
       decay_steps: 10000
       decay_rate: 1.0
       staircase: false
