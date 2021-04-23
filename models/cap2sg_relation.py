@@ -141,11 +141,10 @@ def _relation_classify(proposal_features, embeddings, bias, name=None):
     relation_logits: Logits tensor, a [batch, max_n_proposal, vocab_size] float tensor.
     relation_scores: Normalized scores, a [batch, max_n_proposal, vocab_size] float tensor.
   """
-  relation_head = tf.layers.Dense(embeddings.shape[-1].value,
-                                  activation=None,
-                                  use_bias=True,
-                                  kernel_initializer='glorot_normal',
-                                  name=name)(proposal_features)
+  relation_head = tf.layers.Dense(
+      embeddings.shape[-1].value,
+      kernel_initializer=tf.keras.initializers.RandomNormal(mean=0.0, stddev=0.01),
+      name=name)(proposal_features)
   relation_logits = tf.matmul(relation_head, embeddings, transpose_b=True)
   return tf.nn.bias_add(relation_logits, bias)
 
@@ -270,8 +269,9 @@ def _postprocess_relations(num_detections,
       for i, val in enumerate(py_list):
         array[i] = val
 
-    _init_zero_int = lambda: np.zeros((relation_max_total_size), np.int32)
-    _init_zero_float = lambda: np.zeros((relation_max_total_size), np.float32)
+    def _init_zero_int(): return np.zeros((relation_max_total_size), np.int32)
+
+    def _init_zero_float(): return np.zeros((relation_max_total_size), np.float32)
 
     num_relations = np.array(n_relations, np.int32)
     log_prob = _init_zero_float()

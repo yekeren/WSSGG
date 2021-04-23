@@ -166,7 +166,9 @@ def _initialize_biases(embeddings, bias_mode):
   elif model_pb2.BIAS_MODE_TRAIN_FROM_EMBEDDING == bias_mode:
     biases = [
         tf.squeeze(
-            tf.layers.Dense(1, activation=None, use_bias=True,
+            tf.layers.Dense(1,
+                            kernel_initializer=tf.keras.initializers.RandomNormal(
+                                mean=0.0, stddev=0.01),
                             name=name)(embeddings), -1)
         for name in ['entity_bias', 'attribute_bias', 'relation_bias']
     ]

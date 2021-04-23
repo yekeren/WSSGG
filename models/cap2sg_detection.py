@@ -75,8 +75,8 @@ def detect_entities(options, dt):
 
     # Predict detection scores.
     detection_head = tf.layers.Dense(dt.dims,
-                                     activation=None,
-                                     kernel_initializer='glorot_normal',
+                                     kernel_initializer=tf.keras.initializers.RandomNormal(
+                                         mean=0.0, stddev=0.01),
                                      name='entity_detection_head_%i' % itno)(
                                          dt.proposal_features)
     (detection_instance_logits,
@@ -99,8 +99,8 @@ def detect_entities(options, dt):
         dt.grounding.entity_proposal_id, dt.per_ent_att_ids, dt.max_n_proposal,
         dt.vocab_size)
     attribute_head = tf.layers.Dense(dt.dims,
-                                     activation=None,
-                                     kernel_initializer='glorot_normal',
+                                     kernel_initializer=tf.keras.initializers.RandomNormal(
+                                         mean=0.0, stddev=0.01),
                                      name='attribute_detection_head')(
                                          dt.proposal_features)
     (dt.attribute_instance_logits,
@@ -110,10 +110,12 @@ def detect_entities(options, dt):
 
   # Save the grounding results.
   dt.refined_grounding.entity_proposal_id = entity_proposal_id
-  dt.refined_grounding.entity_proposal_score = tf.reduce_max(dummy_attention, 2)
+  dt.refined_grounding.entity_proposal_score = tf.reduce_max(
+      dummy_attention, 2)
 
   indices = _get_full_indices(entity_proposal_id)
-  dt.refined_grounding.entity_proposal_box = tf.gather_nd(dt.proposals, indices)
+  dt.refined_grounding.entity_proposal_box = tf.gather_nd(
+      dt.proposals, indices)
   dt.refined_grounding.entity_proposal_feature = tf.gather_nd(
       dt.proposal_features, indices)
 
@@ -128,7 +130,8 @@ def detect_entities(options, dt):
        max_total_size=post_process.max_total_size,
        iou_threshold=post_process.iou_thresh,
        score_threshold=post_process.score_thresh)
-  dt.detection.nmsed_classes = tf.cast(1 + dt.detection.nmsed_classes, tf.int32)
+  dt.detection.nmsed_classes = tf.cast(
+      1 + dt.detection.nmsed_classes, tf.int32)
 
   # Get the proposal id of the detection box, then fetch the other information.
   iou = _compute_iou(dt.detection.valid_detections, dt.detection.nmsed_boxes,

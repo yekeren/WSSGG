@@ -63,9 +63,8 @@ def ground_entities(options, dt, is_training):
   # Compute the attention, entity, and attribute heads.
   attention_head, entity_head, attribute_head = [
       tf.layers.Dense(dt.dims,
-                      activation=None,
-                      use_bias=True,
-                      kernel_initializer='glorot_normal',
+                      kernel_initializer=tf.keras.initializers.RandomNormal(
+                          mean=0.0, stddev=0.01),
                       name=name)(dt.proposal_features)
       for name in ['attention_head', 'entity_head', 'attribute_head']
   ]

@@ -207,8 +207,9 @@ class Cap2SG(model_base.ModelBase):
     if self.options.HasField('hidden_units'):
       proposal_features = tf.layers.Dense(
           self.options.hidden_units,
-          activation=tf.nn.leaky_relu,
-          kernel_initializer='glorot_normal',
+          activation=tf.nn.relu6,
+          kernel_initializer=tf.keras.initializers.RandomNormal(
+              mean=0.0, stddev=0.01),
           name='proposal_features')(proposal_features)
       proposal_features = tf.nn.dropout(proposal_features,
                                         keep_prob=dropout_keep_prob)
@@ -446,7 +447,7 @@ class Cap2SG(model_base.ModelBase):
 
     if self.options.weight_decay > 0:
       for var in tf.trainable_variables():
-        if 'kernel' in var.op.name:
+        if 'kernel' in var.op.name and 'rnn' not in var.op.name:
           loss = tf.nn.l2_loss(var, name=var.op.name.split('/')[0])
           loss = tf.multiply(self.options.weight_decay, loss,
                              name='_'.join(var.op.name.split('/')[:2]) + '_loss')
