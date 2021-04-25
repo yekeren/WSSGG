@@ -56,6 +56,7 @@ model {
     grounding_options {
       loss_weight: 1.0
       two_branches: true
+      midn_attention_dropout_keep_prob: 1.0
     }
     detection_options {
       loss_weight: 0.5
@@ -79,8 +80,9 @@ model {
     }
     common_sense_options {
       loss_weight: 0.5
-      triple_loss_weight: 0.5
+      triple_loss_weight: 0.0
       rnn_hidden_units: 100
+      rnn_input_keep_prob: 0.8
       rnn_output_keep_prob: 0.8
       rnn_state_keep_prob: 0.8
     }
